@@ -49,15 +49,16 @@ public class ContextlabClient {
     /**
      * 查询 Contextlab 上可见的 skill 列表（分页）。
      *
-     * <p>注意：{@code empId} 与 {@code deptNo} 不能同时使用；若两者都传，优先使用 {@code deptNo}。
+     * <p>与 PaasManager 保持一致，支持按 empId 可见、按 ownerEmpId 拥有、按 resourceId 内置平台三种维度。
      */
     public List<ContextlabResourceItem> querySkills(
             String empId,
+            String ownerEmpId,
             List<String> scopes,
+            List<String> resourceIds,
             boolean includePublic,
             int offset,
-            int limit,
-            String deptNo) {
+            int limit) {
 
         StringBuilder uri = new StringBuilder(endpoint)
                 .append("/api/resources?resourceType=skill")
@@ -65,10 +66,14 @@ public class ContextlabClient {
                 .append("&offset=").append(offset)
                 .append("&limit=").append(limit);
 
-        if (StringUtils.hasText(deptNo)) {
-            uri.append("&deptNo=").append(urlEncode(deptNo));
-        } else if (StringUtils.hasText(empId)) {
+        if (StringUtils.hasText(ownerEmpId)) {
+            uri.append("&ownerEmpId=").append(urlEncode(ownerEmpId));
+        }
+        if (StringUtils.hasText(empId)) {
             uri.append("&empId=").append(urlEncode(empId));
+        }
+        if (!CollectionUtils.isEmpty(resourceIds)) {
+            uri.append("&resourceId=").append(urlEncode(String.join(",", resourceIds)));
         }
         if (!CollectionUtils.isEmpty(scopes)) {
             uri.append("&scope=").append(urlEncode(String.join(",", scopes)));

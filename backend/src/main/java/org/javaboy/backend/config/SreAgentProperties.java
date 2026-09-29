@@ -360,7 +360,7 @@ public class SreAgentProperties {
         private String token;
         private boolean includePublic = true;
         private List<String> scopes = new ArrayList<>();
-        private String deptNo;
+        private String builtinPlatformResourceId;
         private int catalogCacheMinutes = 5;
         private int packageCacheMinutes = 30;
         private int pageSize = 100;
@@ -406,12 +406,12 @@ public class SreAgentProperties {
             this.scopes = scopes != null ? scopes : new ArrayList<>();
         }
 
-        public String getDeptNo() {
-            return deptNo;
+        public String getBuiltinPlatformResourceId() {
+            return builtinPlatformResourceId;
         }
 
-        public void setDeptNo(String deptNo) {
-            this.deptNo = deptNo;
+        public void setBuiltinPlatformResourceId(String builtinPlatformResourceId) {
+            this.builtinPlatformResourceId = builtinPlatformResourceId;
         }
 
         public int getCatalogCacheMinutes() {

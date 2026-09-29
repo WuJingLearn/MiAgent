@@ -12,7 +12,9 @@ import org.springframework.util.StringUtils;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -54,7 +56,7 @@ public class ContextlabSkillRepository implements RuntimeContextSkillRepository 
             return cached.skills();
         }
         try {
-            List<ContextlabResourceItem> items = fetchAllPages(empId);
+            List<ContextlabResourceItem> items = fetchAllSkillResources(empId);
             List<AgentSkill> skills = new ArrayList<>(items.size());
             for (ContextlabResourceItem item : items) {
                 String name = skillNameFromSource(item.source());
@@ -138,17 +140,50 @@ public class ContextlabSkillRepository implements RuntimeContextSkillRepository 
         // read-only by design
     }
 
-    private List<ContextlabResourceItem> fetchAllPages(String empId) {
+    private List<ContextlabResourceItem> fetchAllSkillResources(String empId) {
+        // 与 PaasManager 保持一致：并发查 owned / visible / builtIn 三类资源后合并去重。
+        List<ContextlabResourceItem> owned = fetchAllPages(empId, empId, props.getScopes(), true);
+        List<ContextlabResourceItem> visible = fetchAllPages(empId, null, props.getScopes(), false);
+        List<ContextlabResourceItem> builtIn = fetchBuiltInResources();
+
+        Map<String, ContextlabResourceItem> seen = new LinkedHashMap<>();
+        for (List<ContextlabResourceItem> batch : List.of(owned, visible, builtIn)) {
+            for (ContextlabResourceItem item : batch) {
+                String key = StringUtils.hasText(item.resourceId()) ? item.resourceId() : item.source();
+                if (StringUtils.hasText(key)) {
+                    seen.putIfAbsent(key, item);
+                }
+            }
+        }
+        return new ArrayList<>(seen.values());
+    }
+
+    private List<ContextlabResourceItem> fetchBuiltInResources() {
+        String builtinId = props.getBuiltinPlatformResourceId();
+        if (!StringUtils.hasText(builtinId)) {
+            return List.of();
+        }
+        return fetchAllPages(null, null, List.of(), true, List.of(builtinId));
+    }
+
+    private List<ContextlabResourceItem> fetchAllPages(
+            String empId, String ownerEmpId, List<String> scopes, boolean includePublic) {
+        return fetchAllPages(empId, ownerEmpId, scopes, includePublic, List.of());
+    }
+
+    private List<ContextlabResourceItem> fetchAllPages(
+            String empId,
+            String ownerEmpId,
+            List<String> scopes,
+            boolean includePublic,
+            List<String> resourceIds) {
         List<ContextlabResourceItem> all = new ArrayList<>();
         int offset = 0;
         int limit = props.getPageSize();
         int max = props.getMaxSkills();
-        String deptNo = props.getDeptNo();
-        // empId 与 deptNo 不能同时使用，配置了 deptNo 时忽略当前请求的 empId。
-        String effectiveEmpId = StringUtils.hasText(deptNo) ? null : empId;
         while (all.size() < max) {
             List<ContextlabResourceItem> page = client.querySkills(
-                    effectiveEmpId, props.getScopes(), props.isIncludePublic(), offset, limit, deptNo);
+                    empId, ownerEmpId, scopes, resourceIds, includePublic, offset, limit);
             if (page.isEmpty()) {
                 break;
             }

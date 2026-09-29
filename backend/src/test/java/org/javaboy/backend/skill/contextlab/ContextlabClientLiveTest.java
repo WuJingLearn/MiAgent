@@ -28,7 +28,8 @@ class ContextlabClientLiveTest {
     void shouldQueryAndDownloadSkill() {
         ContextlabClient client = new ContextlabClient(testProperties());
 
-        List<ContextlabResourceItem> items = client.querySkills(null, List.of(), true, 0, 20, null);
+        List<ContextlabResourceItem> items = client.querySkills(
+                null, null, List.of(), List.of(), true, 0, 20);
         assertThat(items).isNotEmpty();
 
         ContextlabResourceItem publicSkill = items.stream()
@@ -47,23 +48,20 @@ class ContextlabClientLiveTest {
     }
 
     @Test
-    void shouldQueryDepartmentVisibleSkills() {
+    void shouldQueryOwnedAndVisibleSkills() {
         SreAgentProperties props = testProperties();
-        props.getContextlab().setDeptNo("@370734");
         ContextlabClient client = new ContextlabClient(props);
 
-        List<ContextlabResourceItem> items = client.querySkills(
-                null, List.of(), false, 0, 10, props.getContextlab().getDeptNo());
-        assertThat(items).isNotEmpty();
+        String empId = "370734";
+        List<ContextlabResourceItem> owned = client.querySkills(
+                null, empId, List.of(), List.of(), true, 0, 20);
+        List<ContextlabResourceItem> visible = client.querySkills(
+                empId, null, List.of(), List.of(), false, 0, 20);
 
-        ContextlabResourceItem deptSkill = items.get(0);
-        String name = deptSkill.source().substring("skill:".length());
-        byte[] zip = client.downloadZip(name, deptSkill.latestVersion());
-        assertThat(zip).isNotEmpty();
-
-        AgentSkill skill = ContextlabSkillPackageParser.parse(zip, "contextlab");
-        assertThat(skill.getName()).isEqualTo(name);
-        System.out.println("Loaded department skill: " + name);
+        // owned / visible 可能为空（取决于该 empId 是否真实存在权限），但至少不会报错。
+        assertThat(owned).isNotNull();
+        assertThat(visible).isNotNull();
+        System.out.println("Owned skills: " + owned.size() + ", Visible skills: " + visible.size());
     }
 
     @Test

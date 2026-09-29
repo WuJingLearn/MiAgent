@@ -9,6 +9,7 @@ import java.util.Map;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ContextlabResourceItem(
+        String resourceId,
         String source,
         String resourceName,
         String description,
