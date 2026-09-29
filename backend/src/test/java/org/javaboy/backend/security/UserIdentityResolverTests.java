@@ -20,8 +20,8 @@ class UserIdentityResolverTests {
     }
 
     @Test
-    void rejectsMissingHeader() {
-        assertThrows(ResponseStatusException.class,
-                () -> resolver.resolve(new MockHttpServletRequest()));
+    void fallsBackToDefaultUserIdWhenHeaderMissing() {
+        assertEquals(UserIdentityResolver.DEFAULT_USER_ID,
+                resolver.resolve(new MockHttpServletRequest()));
     }
 }

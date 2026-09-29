@@ -17,14 +17,18 @@ import org.javaboy.backend.agent.ModelRetryMiddleware;
 import org.javaboy.backend.agent.ModelRoutingMiddleware;
 import org.javaboy.backend.sandbox.AoneSandboxFilesystem;
 import org.javaboy.backend.sandbox.AoneSandboxRegistry;
+import org.javaboy.backend.skill.contextlab.ContextlabClient;
+import org.javaboy.backend.skill.contextlab.ContextlabSkillRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import javax.sql.DataSource;
+import java.util.Optional;
 import java.util.concurrent.Executor;
 
 @Configuration
@@ -48,6 +52,13 @@ public class AgentScopeConfig {
         return new ModelRetryMiddleware(
                 properties.getModelRetry().isEnabled(),
                 properties.getModelRetry().getMaxRetries());
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "sreagent.contextlab", name = "enabled", havingValue = "true")
+    public ContextlabSkillRepository contextlabSkillRepository(
+            ContextlabClient client, SreAgentProperties properties) {
+        return new ContextlabSkillRepository(client, properties);
     }
 
     @Bean
@@ -91,7 +102,8 @@ public class AgentScopeConfig {
             ModelRetryMiddleware modelRetryMiddleware,
             LogQueryTool logQueryTool,
             AoneSandboxRegistry aoneSandboxRegistry,
-            DistributedStore agentDistributedStore) {
+            DistributedStore agentDistributedStore,
+            Optional<ContextlabSkillRepository> contextlabSkillRepository) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(logQueryTool);
 
@@ -117,6 +129,8 @@ public class AgentScopeConfig {
                         .build())
                 .maxIters(properties.getMaxIters())
                 .disableSubagents();
+
+        contextlabSkillRepository.ifPresent(builder::skillRepository);
 
         if (sandboxEnabled) {
             builder.abstractFilesystem(new AoneSandboxFilesystem(aoneSandboxRegistry, properties));

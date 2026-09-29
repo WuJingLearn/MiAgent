@@ -1,4 +1,4 @@
-import { Menu, Moon, Settings, Sun } from 'lucide-react'
+import { Menu, Moon, Plus, Settings, Sun } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface AppHeaderProps {
@@ -7,6 +7,7 @@ interface AppHeaderProps {
   status: string
   theme: 'light' | 'dark'
   onOpenSidebar: () => void
+  onNewChat: () => void
   onToggleTheme: () => void
   onOpenSettings: () => void
 }
@@ -17,6 +18,7 @@ export function AppHeader({
   status,
   theme,
   onOpenSidebar,
+  onNewChat,
   onToggleTheme,
   onOpenSettings,
 }: AppHeaderProps) {
@@ -32,6 +34,9 @@ export function AppHeader({
         </div>
       </div>
       <div className="header-actions">
+        <Button className="icon-button" onClick={onNewChat} aria-label="新建会话">
+          <Plus size={17} />
+        </Button>
         <div className="runtime-status" title="当前会话运行状态">
           <span className={`status-dot ${status === '生成中' ? 'is-pulsing' : ''}`} aria-hidden="true" />
           <span>{status}</span>

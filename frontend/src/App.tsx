@@ -65,6 +65,7 @@ function App() {
           status={status}
           theme={theme}
           onOpenSidebar={() => setSidebarOpen(true)}
+          onNewChat={() => { workspace.startNewChat(); setDraft('') }}
           onToggleTheme={() => setTheme((current) => current === 'light' ? 'dark' : 'light')}
           onOpenSettings={() => setSettingsOpen(true)}
         />

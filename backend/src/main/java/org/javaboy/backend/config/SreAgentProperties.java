@@ -3,7 +3,9 @@ package org.javaboy.backend.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @ConfigurationProperties(prefix = "sreagent")
@@ -27,6 +29,7 @@ public class SreAgentProperties {
     private Map<String, ModelDefinition> models = new LinkedHashMap<>();
     private ModelRetry modelRetry = new ModelRetry();
     private Sandbox sandbox = new Sandbox();
+    private ContextlabSkill contextlab = new ContextlabSkill();
 
     public String getName() {
         return name;
@@ -172,6 +175,14 @@ public class SreAgentProperties {
         this.sandbox = sandbox;
     }
 
+    public ContextlabSkill getContextlab() {
+        return contextlab;
+    }
+
+    public void setContextlab(ContextlabSkill contextlab) {
+        this.contextlab = contextlab;
+    }
+
     public static class ModelDefinition {
         private String displayName;
         private String modelId;
@@ -227,7 +238,7 @@ public class SreAgentProperties {
         private boolean enabled = true;
         private String apiKey;
         private String template = "code-interpreter";
-        private int timeoutMinutes = 60;
+        private int timeoutMinutes = 24 * 60;
         private int renewThresholdMinutes = 15;
         private int readyTimeoutSeconds = 120;
         private int connectTimeoutSeconds = 30;
@@ -340,6 +351,99 @@ public class SreAgentProperties {
 
         public void setMaxOutputChars(int maxOutputChars) {
             this.maxOutputChars = maxOutputChars;
+        }
+    }
+
+    public static class ContextlabSkill {
+        private boolean enabled = false;
+        private String endpoint = "https://contextlab.alibaba-inc.com";
+        private String token;
+        private boolean includePublic = true;
+        private List<String> scopes = new ArrayList<>();
+        private String deptNo;
+        private int catalogCacheMinutes = 5;
+        private int packageCacheMinutes = 30;
+        private int pageSize = 100;
+        private int maxSkills = 1000;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getEndpoint() {
+            return endpoint;
+        }
+
+        public void setEndpoint(String endpoint) {
+            this.endpoint = endpoint;
+        }
+
+        public String getToken() {
+            return token;
+        }
+
+        public void setToken(String token) {
+            this.token = token;
+        }
+
+        public boolean isIncludePublic() {
+            return includePublic;
+        }
+
+        public void setIncludePublic(boolean includePublic) {
+            this.includePublic = includePublic;
+        }
+
+        public List<String> getScopes() {
+            return scopes;
+        }
+
+        public void setScopes(List<String> scopes) {
+            this.scopes = scopes != null ? scopes : new ArrayList<>();
+        }
+
+        public String getDeptNo() {
+            return deptNo;
+        }
+
+        public void setDeptNo(String deptNo) {
+            this.deptNo = deptNo;
+        }
+
+        public int getCatalogCacheMinutes() {
+            return catalogCacheMinutes;
+        }
+
+        public void setCatalogCacheMinutes(int catalogCacheMinutes) {
+            this.catalogCacheMinutes = catalogCacheMinutes;
+        }
+
+        public int getPackageCacheMinutes() {
+            return packageCacheMinutes;
+        }
+
+        public void setPackageCacheMinutes(int packageCacheMinutes) {
+            this.packageCacheMinutes = packageCacheMinutes;
+        }
+
+        public int getPageSize() {
+            return pageSize;
+        }
+
+        public void setPageSize(int pageSize) {
+            this.pageSize = pageSize;
+        }
+
+        public int getMaxSkills() {
+            return maxSkills;
+        }
+
+        public void setMaxSkills(int maxSkills) {
+            this.maxSkills = maxSkills;
         }
     }
 }
