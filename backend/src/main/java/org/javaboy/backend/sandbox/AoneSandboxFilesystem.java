@@ -57,6 +57,10 @@ public class AoneSandboxFilesystem extends BaseSandboxFilesystem {
         if (command == null || command.isBlank()) {
             return new ExecuteResponse("command 不能为空", -1, false);
         }
+        if (!hasUserContext(runtimeContext)) {
+            log.debug("启动阶段无用户上下文，跳过沙箱命令执行: {}", command);
+            return new ExecuteResponse("", 1, false);
+        }
         try {
             Sandbox sandbox = sandbox(runtimeContext);
             int configuredTimeout = positive(properties.getExecTimeoutSeconds(), 120);
@@ -224,12 +228,16 @@ public class AoneSandboxFilesystem extends BaseSandboxFilesystem {
     }
 
     private Sandbox sandbox(RuntimeContext runtimeContext) {
-        if (runtimeContext == null
-                || runtimeContext.getUserId() == null
-                || runtimeContext.getUserId().isBlank()) {
+        if (!hasUserContext(runtimeContext)) {
             throw new IllegalArgumentException("无法识别当前用户，不能访问沙箱文件系统");
         }
         return registry.getOrCreate(runtimeContext.getUserId());
+    }
+
+    private boolean hasUserContext(RuntimeContext runtimeContext) {
+        return runtimeContext != null
+                && runtimeContext.getUserId() != null
+                && !runtimeContext.getUserId().isBlank();
     }
 
     private String resolvePath(String path) {

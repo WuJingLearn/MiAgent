@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { useChatWorkspace } from '@/hooks/useChatWorkspace'
 
 function App() {
-  const [userId, setUserId] = useState('demo-user')
+  const [userId, setUserId] = useState('370734')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
