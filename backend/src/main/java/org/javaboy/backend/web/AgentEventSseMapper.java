@@ -12,6 +12,8 @@ import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.event.ToolResultStartEvent;
 import io.agentscope.core.event.ToolResultTextDeltaEvent;
+import io.agentscope.core.message.GenerateReason;
+import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.ToolResultState;
 import org.javaboy.backend.web.dto.ChatDtos.SsePayload;
 import org.springframework.http.MediaType;
@@ -25,11 +27,18 @@ import java.util.Optional;
  * 将 AgentScope 的流式事件映射为前端可消费的 SSE 负载。覆盖一次回复中的四类内容：
  * 模型思考（thinking）、正文回复（text）、工具调用信息（tool + 入参）、工具执行结果（tool_result）。
  * 事件生命周期遵循 start → delta → end，前端按 blockId / toolCallId 聚合还原。
+ *
+ * <p>映射分两步：{@link #mapToPayload} 产出可序列化的 {@link SsePayload}（既能落 Redis 缓冲，也能
+ * 直接下发），{@link #toSse} 再把负载组装成 {@link SseEmitter} 事件。实时推送与断线回放共用同一套负载，
+ * 保证两条路径展示结构一致。
  */
 @Component
 public class AgentEventSseMapper {
 
-    public Optional<SseEmitter.SseEventBuilder> map(AgentEvent event) {
+    /**
+     * 把一个 Agent 事件映射为可序列化负载。返回 {@code Optional.empty()} 表示该事件无需下发。
+     */
+    public Optional<SsePayload> mapToPayload(AgentEvent event) {
         SsePayload payload;
 
         if (event instanceof ThinkingBlockDeltaEvent delta) {
@@ -64,7 +73,14 @@ public class AgentEventSseMapper {
                     "toolCallId", nullToEmpty(result.getToolCallId()),
                     "state", state == null ? "SUCCESS" : state.name()));
         } else if (event instanceof AgentResultEvent result) {
-            String text = result.getResult() == null ? "" : result.getResult().getTextContent();
+            // 用户主动中断时，框架返回的是一条 GenerateReason.INTERRUPTED 的“恢复提示”消息，
+            // 并非真实回复。此处跳过，避免用它覆盖前端已累积的半截正文；已生成内容此前已通过
+            // text_delta 下发并落库（state_data），历史回显仍能看到。
+            Msg resultMsg = result.getResult();
+            if (resultMsg != null && resultMsg.getGenerateReason() == GenerateReason.INTERRUPTED) {
+                return Optional.empty();
+            }
+            String text = resultMsg == null ? "" : resultMsg.getTextContent();
             payload = new SsePayload("result", event.getId(), Map.of("text", text == null ? "" : text));
         } else if (event instanceof AgentEndEvent) {
             payload = new SsePayload("done", event.getId(), Map.of());
@@ -75,19 +91,17 @@ public class AgentEventSseMapper {
         } else {
             return Optional.empty();
         }
-        return Optional.of(toSse(payload));
+        return Optional.of(payload);
     }
 
-    public SseEmitter.SseEventBuilder error(Throwable error) {
+    /** 生成一条 error 负载，用于把后台异常以 SSE 形式下发给前端。 */
+    public SsePayload errorPayload(Throwable error) {
         String message = error.getMessage() == null ? "诊断请求失败" : error.getMessage();
-        return toSse(new SsePayload("error", null, Map.of("message", message)));
+        return new SsePayload("error", null, Map.of("message", message));
     }
 
-    private String nullToEmpty(String value) {
-        return value == null ? "" : value;
-    }
-
-    private SseEmitter.SseEventBuilder toSse(SsePayload payload) {
+    /** 把负载组装成 SSE 事件；实时推送与缓冲回放共用。 */
+    public SseEmitter.SseEventBuilder toSse(SsePayload payload) {
         SseEmitter.SseEventBuilder builder = SseEmitter.event()
                 .name(payload.type())
                 .data(payload, MediaType.APPLICATION_JSON);
@@ -95,5 +109,9 @@ public class AgentEventSseMapper {
             builder = builder.id(payload.id());
         }
         return builder;
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 }

@@ -97,3 +97,60 @@ export async function openMessageStream(
   if (!response.body) throw new ApiError(502, '服务端未返回可读取的事件流。')
   return response
 }
+
+export interface StreamStatus {
+  state: string
+  turnId: string | null
+  startedAt: number
+}
+
+/** 查询某会话当前轮的流状态，刷新后据此判断是否需要重连续流。 */
+export async function fetchStreamStatus(
+  userId: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<StreamStatus> {
+  const response = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/stream/status`, {
+    headers: { 'X-User-Id': userId },
+    signal,
+  })
+  if (!response.ok) await throwApiError(response)
+  return response.json() as Promise<StreamStatus>
+}
+
+/** 重连续流：从缓冲 offset 起回放已生成事件并继续 tail，返回 SSE 响应。 */
+export async function reconnectStream(
+  userId: string,
+  sessionId: string,
+  turnId: string | null,
+  offset: number,
+  signal: AbortSignal,
+): Promise<Response> {
+  const response = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/stream/reconnect`, {
+    method: 'POST',
+    headers: {
+      'Accept': 'text/event-stream',
+      'Content-Type': 'application/json',
+      'X-User-Id': userId,
+    },
+    body: JSON.stringify({ turnId, offset }),
+    signal,
+  })
+  if (!response.ok) await throwApiError(response)
+  if (!response.body) throw new ApiError(502, '服务端未返回可读取的事件流。')
+  return response
+}
+
+/** 用户主动停止：通知后端对当前会话发起 AgentScope interrupt。 */
+export async function interruptStream(
+  userId: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/stream/interrupt`, {
+    method: 'POST',
+    headers: { 'X-User-Id': userId },
+    signal,
+  })
+  if (!response.ok) await throwApiError(response)
+}

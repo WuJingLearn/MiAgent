@@ -51,4 +51,15 @@ public final class ChatDtos {
             String result,
             String resultState) {
     }
+
+    public record StreamStatusResponse(
+            String state,
+            String turnId,
+            long startedAt) {
+    }
+
+    public record ReconnectRequest(
+            String turnId,
+            Long offset) {
+    }
 }

@@ -5,6 +5,7 @@ import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.AgentResultEvent;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
+import lombok.extern.slf4j.Slf4j;
 import org.javaboy.backend.agent.ModelRoutingMiddleware;
 import org.javaboy.backend.config.SreAgentProperties;
 import org.javaboy.backend.domain.ChatSession;
@@ -18,6 +19,7 @@ import java.util.Iterator;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+@Slf4j
 @Service
 public class ChatService {
 
@@ -97,6 +99,7 @@ public class ChatService {
             }
             sessionRepository.completeTurn(sessionId, requestId, finalResponse);
         } catch (Throwable error) {
+            log.error("Error streaming events to consumer", error);
             sessionRepository.failTurn(sessionId, requestId, error.getMessage());
             throw error;
         } finally {

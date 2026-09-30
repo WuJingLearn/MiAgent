@@ -30,6 +30,7 @@ public class SreAgentProperties {
     private ModelRetry modelRetry = new ModelRetry();
     private Sandbox sandbox = new Sandbox();
     private ContextlabSkill contextlab = new ContextlabSkill();
+    private Stream stream = new Stream();
 
     public String getName() {
         return name;
@@ -181,6 +182,66 @@ public class SreAgentProperties {
 
     public void setContextlab(ContextlabSkill contextlab) {
         this.contextlab = contextlab;
+    }
+
+    public Stream getStream() {
+        return stream;
+    }
+
+    public void setStream(Stream stream) {
+        this.stream = stream;
+    }
+
+    /**
+     * 流式续跑相关配置：Agent 生成与 HTTP 连接解耦后，事件先落 Redis 缓冲（“可回放磁带”），
+     * 客户端断开只结束 tail，后台继续生成；刷新后通过 status/reconnect 回放续流。
+     */
+    public static class Stream {
+        private String keyPrefix = "sre:stream:";
+        private int ttlMinutes = 30;
+        private int heartbeatSeconds = 5;
+        private int staleAfterSeconds = 30;
+        private long pollMillis = 150;
+
+        public String getKeyPrefix() {
+            return keyPrefix;
+        }
+
+        public void setKeyPrefix(String keyPrefix) {
+            this.keyPrefix = keyPrefix;
+        }
+
+        public int getTtlMinutes() {
+            return ttlMinutes;
+        }
+
+        public void setTtlMinutes(int ttlMinutes) {
+            this.ttlMinutes = ttlMinutes;
+        }
+
+        public int getHeartbeatSeconds() {
+            return heartbeatSeconds;
+        }
+
+        public void setHeartbeatSeconds(int heartbeatSeconds) {
+            this.heartbeatSeconds = heartbeatSeconds;
+        }
+
+        public int getStaleAfterSeconds() {
+            return staleAfterSeconds;
+        }
+
+        public void setStaleAfterSeconds(int staleAfterSeconds) {
+            this.staleAfterSeconds = staleAfterSeconds;
+        }
+
+        public long getPollMillis() {
+            return pollMillis;
+        }
+
+        public void setPollMillis(long pollMillis) {
+            this.pollMillis = pollMillis;
+        }
     }
 
     public static class ModelDefinition {

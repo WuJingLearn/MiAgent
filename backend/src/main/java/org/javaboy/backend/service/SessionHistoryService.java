@@ -3,12 +3,14 @@ package org.javaboy.backend.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.javaboy.backend.config.SreAgentProperties;
+import org.javaboy.backend.repository.ChatSessionRepository;
 import org.javaboy.backend.web.dto.ChatDtos.HistoryMessage;
 import org.javaboy.backend.web.dto.ChatDtos.HistoryToolCall;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -23,15 +25,21 @@ import java.util.Map;
 public class SessionHistoryService {
 
     private static final String AGENT_STATE_KEY = "agent_state";
+    /** Msg 元数据中记录生成原因的 key（见 io.agentscope.core.message.Msg#METADATA_GENERATE_REASON）。 */
+    private static final String METADATA_GENERATE_REASON = "agentscope_generate_reason";
+    private static final String REASON_INTERRUPTED = "INTERRUPTED";
 
     private final JdbcTemplate jdbcTemplate;
+    private final ChatSessionRepository chatSessionRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final String selectStateSql;
 
     public SessionHistoryService(
             JdbcTemplate jdbcTemplate,
+            ChatSessionRepository chatSessionRepository,
             SreAgentProperties properties) {
         this.jdbcTemplate = jdbcTemplate;
+        this.chatSessionRepository = chatSessionRepository;
         // 表名来自可信配置，不来自用户输入，直接拼接安全。
         this.selectStateSql = "SELECT state_data FROM " + properties.getAgentStateTable()
                 + " WHERE session_id = ? AND state_key = ? ORDER BY item_index LIMIT 1";
@@ -43,7 +51,18 @@ public class SessionHistoryService {
             return List.of();
         }
         try {
-            return parse(stateData);
+            List<HistoryMessage> messages = new ArrayList<>();
+            boolean trailingInterrupted = parse(stateData, messages);
+            if (trailingInterrupted) {
+                // 中断轮的半截正文不会落 state_data（框架只追加了被过滤的恢复提示），
+                // 用 chat_turn.response_text 兼底补一条 stopped 助手消息，保证刷新后仍能看到已生成内容。
+                chatSessionRepository.findLatestTurnResponse(sessionId)
+                        .filter(text -> text != null && !text.isBlank())
+                        .ifPresent(partial -> messages.add(new HistoryMessage(
+                                null, "assistant", partial, "",
+                                Instant.now().toString(), "stopped", List.of())));
+            }
+            return messages;
         } catch (Exception ex) {
             throw new IllegalStateException("解析会话历史失败: " + ex.getMessage(), ex);
         }
@@ -57,7 +76,7 @@ public class SessionHistoryService {
         }
     }
 
-    private List<HistoryMessage> parse(String stateData) throws Exception {
+    private boolean parse(String stateData, List<HistoryMessage> messages) throws Exception {
         JsonNode root = objectMapper.readTree(stateData);
         // MysqlAgentStateStore 可能按数组或对象落库，两种都兼容。
         if (root.isArray() && !root.isEmpty()) {
@@ -65,19 +84,24 @@ public class SessionHistoryService {
         }
         JsonNode context = root.path("context");
         if (!context.isArray()) {
-            return List.of();
+            return false;
         }
 
         // 工具执行结果在独立的 TOOL 轮里，先按 toolCallId 建索引，供助手轮的 tool_use 关联。
         Map<String, JsonNode> toolResults = indexToolResults(context);
 
-        List<HistoryMessage> messages = new ArrayList<>();
         for (JsonNode item : context) {
             String role = item.path("role").asText("");
             if ("USER".equalsIgnoreCase(role)) {
                 String text = collectText(item.path("content"));
                 messages.add(message(item, "user", text, "", List.of()));
             } else if ("ASSISTANT".equalsIgnoreCase(role)) {
+                // 用户主动中断时，框架会追加一条 GenerateReason.INTERRUPTED 的“恢复提示”消息
+                // （"I noticed that you have interrupted me..."），它不是真实回复，回显时应过滤掉；
+                // 中断前已生成的半截正文/思考/工具调用属于另一条消息（不带 INTERRUPTED），予以保留。
+                if (isInterruptedRecovery(item)) {
+                    continue;
+                }
                 JsonNode content = item.path("content");
                 String text = collectText(content);
                 String reasoning = collectThinking(content);
@@ -89,7 +113,19 @@ public class SessionHistoryService {
             }
             // TOOL 角色为工具执行结果，已在助手消息的工具记录中关联展示，无需单独成条。
         }
-        return messages;
+        // 若 context 末尾是被过滤的中断恢复消息，说明最近一轮是被中断的（半截正文需兼底）。
+        int size = context.size();
+        if (size > 0) {
+            JsonNode last = context.get(size - 1);
+            return "ASSISTANT".equalsIgnoreCase(last.path("role").asText("")) && isInterruptedRecovery(last);
+        }
+        return false;
+    }
+
+    /** 判断某条 context 消息是否为中断产生的“恢复提示”消息。 */
+    private boolean isInterruptedRecovery(JsonNode item) {
+        String reason = item.path("metadata").path(METADATA_GENERATE_REASON).asText("");
+        return REASON_INTERRUPTED.equalsIgnoreCase(reason);
     }
 
     private Map<String, JsonNode> indexToolResults(JsonNode context) {

@@ -1,0 +1,11 @@
+{
+  "name": "sre-bailian-data-query",
+  "version": "0.11.0",
+  "description": "Use when 需要查询百炼（DashScope）UID 或模型维度的实时运行数据时使用。触发示例：查询 {model} 的调用成功率；查询 {uid} 使用 {model} 的 Prompt Cache 命中率；{uid} 最近有没有被限流（Throttling / limit_requests）；查询 {model} 的 TTFT 耗时 / 延迟分位数（p50/p90/p99）；某 {uid} {model} 的部署模式是什么；某 {uid} {model} 的限流配置是什么,{uid} 配置了哪些 Sunfire 监控。",
+  "publishConfig": {
+    "registry": "https://contextlab.alibaba-inc.com/skill"
+  },
+  "aoneKit": {
+    "generated": true
+  }
+}

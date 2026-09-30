@@ -64,6 +64,7 @@ public class ContextlabSkillRepository implements RuntimeContextSkillRepository 
 
     @Override
     public List<AgentSkill> getAllSkills(RuntimeContext context) {
+        log.info("Loading Contextlab skill catalog for empId={}", context != null ? context.getUserId() : "__anonymous__");
         if (!props.isEnabled()) {
             return List.of();
         }

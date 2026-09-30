@@ -93,6 +93,22 @@ public class ChatSessionRepository {
                 """, abbreviate(errorMessage, 2000), sessionId, requestId);
     }
 
+    /**
+     * 取该会话最近一轮的 response_text（按自增 id 降序）。用户中断时，半截正文不会落
+     * state_data，但会由 completeTurn 写入这里，供历史回显兼底。
+     */
+    public Optional<String> findLatestTurnResponse(String sessionId) {
+        List<String> result = jdbcTemplate.query("""
+                        SELECT response_text FROM chat_turn
+                        WHERE session_id = ?
+                        ORDER BY id DESC LIMIT 1
+                        """,
+                (rs, rowNum) -> rs.getString("response_text"),
+                sessionId);
+        // 注意：response_text 可能为 NULL（该轮仍在进行或已失败），不能用 findFirst()（遇 null 元素会抛 NPE）。
+        return result.isEmpty() ? Optional.empty() : Optional.ofNullable(result.get(0));
+    }
+
     private String abbreviate(String value, int maxLength) {
         if (value == null || value.length() <= maxLength) {
             return value;
