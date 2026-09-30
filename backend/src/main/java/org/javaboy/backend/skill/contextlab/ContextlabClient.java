@@ -109,7 +109,7 @@ public class ContextlabClient {
     public byte[] downloadZip(String fullName, String version) {
         String name = fullName.contains("/") ? fullName.substring(fullName.lastIndexOf('/') + 1) : fullName;
         String path = String.format("/skill/%s/-/%s-%s.zip", fullName, name, version);
-
+        ///skill/sre-bailian-data-query/-/sre-bailian-data-query-0.11.0.zip
         HttpRequest.Builder rb = HttpRequest.newBuilder(URI.create(endpoint + path))
                 .GET()
                 .timeout(Duration.ofSeconds(30));

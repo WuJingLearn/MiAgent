@@ -57,8 +57,10 @@ public class AgentScopeConfig {
     @Bean
     @ConditionalOnProperty(prefix = "sreagent.contextlab", name = "enabled", havingValue = "true")
     public ContextlabSkillRepository contextlabSkillRepository(
-            ContextlabClient client, SreAgentProperties properties) {
-        return new ContextlabSkillRepository(client, properties);
+            ContextlabClient client,
+            SreAgentProperties properties,
+            AoneSandboxRegistry aoneSandboxRegistry) {
+        return new ContextlabSkillRepository(client, properties, aoneSandboxRegistry);
     }
 
     @Bean

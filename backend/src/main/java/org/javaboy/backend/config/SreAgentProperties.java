@@ -365,6 +365,8 @@ public class SreAgentProperties {
         private int packageCacheMinutes = 30;
         private int pageSize = 100;
         private int maxSkills = 1000;
+        private List<String> includeSkills = new ArrayList<>();
+        private List<String> excludeSkills = new ArrayList<>();
 
         public boolean isEnabled() {
             return enabled;
@@ -444,6 +446,22 @@ public class SreAgentProperties {
 
         public void setMaxSkills(int maxSkills) {
             this.maxSkills = maxSkills;
+        }
+
+        public List<String> getIncludeSkills() {
+            return includeSkills;
+        }
+
+        public void setIncludeSkills(List<String> includeSkills) {
+            this.includeSkills = includeSkills != null ? includeSkills : new ArrayList<>();
+        }
+
+        public List<String> getExcludeSkills() {
+            return excludeSkills;
+        }
+
+        public void setExcludeSkills(List<String> excludeSkills) {
+            this.excludeSkills = excludeSkills != null ? excludeSkills : new ArrayList<>();
         }
     }
 }
