@@ -30,6 +30,17 @@ export interface ToolCallState {
   resultState?: string
 }
 
+export type ReActRoundStatus = 'streaming' | 'model_complete' | 'complete' | 'error'
+
+export interface ReActRound {
+  id: string
+  index: number
+  status: ReActRoundStatus
+  content: string
+  reasoning?: string
+  tools: ToolCallState[]
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -38,6 +49,7 @@ export interface ChatMessage {
   createdAt: string
   status?: 'streaming' | 'complete' | 'stopped' | 'error'
   tools?: ToolCallState[]
+  rounds?: ReActRound[]
   error?: string
   sourcePrompt?: string
 }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.AgentResultEvent;
+import io.agentscope.core.event.ModelCallStartEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.message.GenerateReason;
 import io.agentscope.core.message.Msg;
@@ -92,6 +93,7 @@ public class ChatStreamService {
     }
 
     private void runGeneration(String userId, String sessionId, String requestId, String message, RuntimeContext context) {
+        // 5s
         int heartbeatSeconds = properties.getStream().getHeartbeatSeconds();
         ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(
                 () -> {
@@ -108,6 +110,7 @@ public class ChatStreamService {
         String resultText = null;
         boolean interrupted = false;
         boolean finalized = false;
+        ReActRoundTracker rounds = new ReActRoundTracker();
         try {
             lease = leaseService.acquire(userId, sessionId, properties.getSessionLockSeconds()).block();
             try (Stream<AgentEvent> events = agent.streamEvents(new UserMessage(message), context).toStream()) {
@@ -124,7 +127,8 @@ public class ChatStreamService {
                             resultText = resultMsg.getTextContent();
                         }
                     }
-                    mapper.mapToPayload(event).ifPresent(payload -> appendPayload(sessionId, requestId, payload));
+                    mapper.mapToPayload(event, rounds.roundIdFor(event))
+                            .ifPresent(payload -> appendPayload(sessionId, requestId, payload));
 
                     // 方案A：AgentResultEvent(agentEnd) 是语义上的「回答结束」点。收到即落库并标记 DONE，
                     // 让前端 tail 立刻收尾，不再等待 MemoryFlushMiddleware 的 concatWith 把整条流拖到 flush 完成。
@@ -174,6 +178,22 @@ public class ChatStreamService {
         store.markDone(sessionId, requestId);
         log.info("流式生成结束 sessionId={} requestId={} interrupted={} length={}",
                 sessionId, requestId, interrupted, finalResponse.length());
+    }
+
+    /** 每次生成独有的轮次上下文，禁止放进单例 Mapper，避免并发会话混用轮次。 */
+    private static final class ReActRoundTracker {
+        private int roundIndex;
+        private String currentRoundId;
+
+        String roundIdFor(AgentEvent event) {
+            if (event instanceof ModelCallStartEvent) {
+                currentRoundId = "round-" + (++roundIndex);
+            }
+            if (currentRoundId == null) {
+                currentRoundId = "round-" + (++roundIndex);
+            }
+            return currentRoundId;
+        }
     }
 
     private void appendPayload(String sessionId, String turnId, SsePayload payload) {

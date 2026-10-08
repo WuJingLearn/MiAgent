@@ -4,8 +4,14 @@ import io.agentscope.core.event.AgentEndEvent;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.AgentResultEvent;
 import io.agentscope.core.event.ExceedMaxItersEvent;
+import io.agentscope.core.event.ModelCallEndEvent;
+import io.agentscope.core.event.ModelCallStartEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.TextBlockEndEvent;
+import io.agentscope.core.event.TextBlockStartEvent;
 import io.agentscope.core.event.ThinkingBlockDeltaEvent;
+import io.agentscope.core.event.ThinkingBlockEndEvent;
+import io.agentscope.core.event.ThinkingBlockStartEvent;
 import io.agentscope.core.event.ToolCallDeltaEvent;
 import io.agentscope.core.event.ToolCallEndEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
@@ -20,6 +26,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -38,60 +45,58 @@ public class AgentEventSseMapper {
     /**
      * 把一个 Agent 事件映射为可序列化负载。返回 {@code Optional.empty()} 表示该事件无需下发。
      */
-    public Optional<SsePayload> mapToPayload(AgentEvent event) {
+    public Optional<SsePayload> mapToPayload(AgentEvent event, String roundId) {
         SsePayload payload;
-
-        if (event instanceof ThinkingBlockDeltaEvent delta) {
-            payload = new SsePayload("thinking_delta", event.getId(), Map.of(
-                    "blockId", nullToEmpty(delta.getBlockId()),
-                    "delta", nullToEmpty(delta.getDelta())));
+        if (event instanceof ModelCallStartEvent) {
+            payload = new SsePayload("round_start", event.getId(), data(roundId));
+        } else if (event instanceof ModelCallEndEvent end) {
+            payload = new SsePayload("round_model_end", event.getId(), data(roundId,
+                    "inputTokens", end.getUsage() == null ? null : end.getUsage().getInputTokens(),
+                    "outputTokens", end.getUsage() == null ? null : end.getUsage().getOutputTokens()));
+        } else if (event instanceof ThinkingBlockStartEvent start) {
+            payload = new SsePayload("thinking_start", event.getId(), data(roundId, "blockId", start.getBlockId()));
+        } else if (event instanceof ThinkingBlockDeltaEvent delta) {
+            payload = new SsePayload("thinking_delta", event.getId(), data(roundId, "blockId", delta.getBlockId(), "delta", delta.getDelta()));
+        } else if (event instanceof ThinkingBlockEndEvent end) {
+            payload = new SsePayload("thinking_end", event.getId(), data(roundId, "blockId", end.getBlockId()));
+        } else if (event instanceof TextBlockStartEvent start) {
+            payload = new SsePayload("text_start", event.getId(), data(roundId, "blockId", start.getBlockId()));
         } else if (event instanceof TextBlockDeltaEvent delta) {
-            payload = new SsePayload("text_delta", event.getId(), Map.of("delta", nullToEmpty(delta.getDelta())));
-        } else if (event instanceof ToolCallStartEvent toolCall) {
-            payload = new SsePayload("tool_start", event.getId(), Map.of(
-                    "toolCallId", nullToEmpty(toolCall.getToolCallId()),
-                    "toolName", nullToEmpty(toolCall.getToolCallName())));
-        } else if (event instanceof ToolCallDeltaEvent toolCall) {
-            payload = new SsePayload("tool_delta", event.getId(), Map.of(
-                    "toolCallId", nullToEmpty(toolCall.getToolCallId()),
-                    "delta", nullToEmpty(toolCall.getDelta())));
-        } else if (event instanceof ToolCallEndEvent toolCall) {
-            payload = new SsePayload("tool_end", event.getId(), Map.of(
-                    "toolCallId", nullToEmpty(toolCall.getToolCallId()),
-                    "toolName", nullToEmpty(toolCall.getToolCallName())));
+            payload = new SsePayload("text_delta", event.getId(), data(roundId, "delta", delta.getDelta()));
+        } else if (event instanceof TextBlockEndEvent end) {
+            payload = new SsePayload("text_end", event.getId(), data(roundId, "blockId", end.getBlockId()));
+        } else if (event instanceof ToolCallStartEvent tool) {
+            payload = new SsePayload("tool_start", event.getId(), data(roundId, "toolCallId", tool.getToolCallId(), "toolName", tool.getToolCallName()));
+        } else if (event instanceof ToolCallDeltaEvent tool) {
+            payload = new SsePayload("tool_delta", event.getId(), data(roundId, "toolCallId", tool.getToolCallId(), "delta", tool.getDelta()));
+        } else if (event instanceof ToolCallEndEvent tool) {
+            payload = new SsePayload("tool_end", event.getId(), data(roundId, "toolCallId", tool.getToolCallId(), "toolName", tool.getToolCallName()));
         } else if (event instanceof ToolResultStartEvent result) {
-            payload = new SsePayload("tool_result_start", event.getId(), Map.of(
-                    "toolCallId", nullToEmpty(result.getToolCallId()),
-                    "toolName", nullToEmpty(result.getToolCallName())));
+            payload = new SsePayload("tool_result_start", event.getId(), data(roundId, "toolCallId", result.getToolCallId(), "toolName", result.getToolCallName()));
         } else if (event instanceof ToolResultTextDeltaEvent result) {
-            payload = new SsePayload("tool_result_delta", event.getId(), Map.of(
-                    "toolCallId", nullToEmpty(result.getToolCallId()),
-                    "delta", nullToEmpty(result.getDelta())));
+            payload = new SsePayload("tool_result_delta", event.getId(), data(roundId, "toolCallId", result.getToolCallId(), "delta", result.getDelta()));
         } else if (event instanceof ToolResultEndEvent result) {
             ToolResultState state = result.getState();
-            payload = new SsePayload("tool_result_end", event.getId(), Map.of(
-                    "toolCallId", nullToEmpty(result.getToolCallId()),
-                    "state", state == null ? "SUCCESS" : state.name()));
+            payload = new SsePayload("tool_result_end", event.getId(), data(roundId, "toolCallId", result.getToolCallId(), "state", state == null ? "SUCCESS" : state.name()));
         } else if (event instanceof AgentResultEvent result) {
-            // 用户主动中断时，框架返回的是一条 GenerateReason.INTERRUPTED 的“恢复提示”消息，
-            // 并非真实回复。此处跳过，避免用它覆盖前端已累积的半截正文；已生成内容此前已通过
-            // text_delta 下发并落库（state_data），历史回显仍能看到。
             Msg resultMsg = result.getResult();
-            if (resultMsg != null && resultMsg.getGenerateReason() == GenerateReason.INTERRUPTED) {
-                return Optional.empty();
-            }
-            String text = resultMsg == null ? "" : resultMsg.getTextContent();
-            payload = new SsePayload("result", event.getId(), Map.of("text", text == null ? "" : text));
+            if (resultMsg != null && resultMsg.getGenerateReason() == GenerateReason.INTERRUPTED) return Optional.empty();
+            payload = new SsePayload("result", event.getId(), data(roundId, "text", resultMsg == null ? "" : nullToEmpty(resultMsg.getTextContent())));
         } else if (event instanceof AgentEndEvent) {
-            payload = new SsePayload("done", event.getId(), Map.of());
+            payload = new SsePayload("done", event.getId(), data(roundId));
         } else if (event instanceof ExceedMaxItersEvent exceeded) {
-            payload = new SsePayload("error", event.getId(), Map.of(
-                    "code", "MAX_ITERATIONS_EXCEEDED",
-                    "maxIters", exceeded.getMaxIters()));
-        } else {
-            return Optional.empty();
-        }
+            payload = new SsePayload("error", event.getId(), data(roundId, "code", "MAX_ITERATIONS_EXCEEDED", "maxIters", exceeded.getMaxIters()));
+        } else return Optional.empty();
         return Optional.of(payload);
+    }
+
+    private Map<String, Object> data(String roundId, Object... entries) {
+        Map<String, Object> data = new HashMap<>();
+        if (roundId != null && !roundId.isBlank()) data.put("roundId", roundId);
+        for (int i = 0; i < entries.length; i += 2) {
+            if (entries[i + 1] != null) data.put((String) entries[i], entries[i + 1]);
+        }
+        return data;
     }
 
     /** 生成一条 error 负载，用于把后台异常以 SSE 形式下发给前端。 */

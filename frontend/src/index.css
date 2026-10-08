@@ -848,6 +848,38 @@ code {
   color: var(--fg-muted);
 }
 
+.react-round-list {
+  display: grid;
+  gap: 10px;
+}
+
+.react-round {
+  position: relative;
+  max-width: 680px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--seed-radius);
+  background: var(--canvas-subtle);
+}
+
+.react-round-title {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.react-round.is-streaming {
+  border-left-color: var(--success);
+}
+
+.react-round .reasoning-block,
+.react-round .tool-card {
+  max-width: none;
+}
+
 .tool-stack {
   display: grid;
   gap: 6px;

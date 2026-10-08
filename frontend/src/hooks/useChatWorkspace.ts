@@ -10,12 +10,22 @@ import {
   reconnectStream,
 } from '@/lib/api'
 import { consumeSseStream } from '@/lib/sse'
-import type { ChatMessage, ChatSession, ModelOption, StreamEnvelope, ToolCallState } from '@/types'
+import type { ChatMessage, ChatSession, ModelOption, ReActRound, StreamEnvelope, ToolCallState } from '@/types'
 
 const USER_ID_PATTERN = /^[A-Za-z0-9._:@-]{1,128}$/
 const now = () => new Date().toISOString()
 const makeId = () => crypto.randomUUID()
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function updateRound(message: ChatMessage, roundId: string, updater: (round: ReActRound) => ReActRound): ChatMessage {
+  const rounds = message.rounds ?? []
+  const index = rounds.findIndex((round) => round.id === roundId)
+  const current = index === -1
+    ? { id: roundId, index: rounds.length + 1, status: 'streaming' as const, content: '', tools: [] }
+    : rounds[index]
+  const next = updater(current)
+  return { ...message, rounds: index === -1 ? [...rounds, next] : rounds.map((round, i) => i === index ? next : round) }
+}
 
 /** 一轮流式消费的累积状态，供事件处理器与调用方共享。 */
 interface StreamState {
@@ -132,59 +142,42 @@ export function useChatWorkspace(userId: string) {
   ) => {
     const type = envelope.type || eventName
     const data = (envelope.data ?? {}) as Record<string, unknown>
+    const roundId = String(data.roundId ?? 'round-1')
     switch (type) {
+      case 'round_start':
+        updateAssistant(sessionId, assistantId, (item) => updateRound(item, roundId, (round) => ({ ...round, status: 'streaming' })))
+        break
+      case 'round_model_end':
+        updateAssistant(sessionId, assistantId, (item) => updateRound(item, roundId, (round) => ({ ...round, status: 'model_complete' })))
+        break
       case 'text_delta':
-        updateAssistant(sessionId, assistantId, (item) => ({ ...item, content: item.content + String(data.delta ?? '') }))
+        updateAssistant(sessionId, assistantId, (item) => updateRound(item, roundId, (round) => ({ ...round, content: round.content + String(data.delta ?? '') })))
         break
       case 'thinking_delta':
-        updateAssistant(sessionId, assistantId, (item) => ({ ...item, reasoning: (item.reasoning ?? '') + String(data.delta ?? '') }))
+        updateAssistant(sessionId, assistantId, (item) => updateRound(item, roundId, (round) => ({ ...round, reasoning: (round.reasoning ?? '') + String(data.delta ?? '') })))
         break
       case 'tool_start': {
-        const tool: ToolCallState = {
-          id: String(data.toolCallId ?? makeId()),
-          name: String(data.toolName ?? '未命名工具'),
-          status: 'running',
-        }
-        updateAssistant(sessionId, assistantId, (item) => ({ ...item, tools: [...(item.tools ?? []), tool] }))
+        const tool: ToolCallState = { id: String(data.toolCallId ?? makeId()), name: String(data.toolName ?? '未命名工具'), status: 'running' }
+        updateAssistant(sessionId, assistantId, (item) => updateRound(item, roundId, (round) => ({ ...round, tools: [...round.tools, tool] })))
         break
       }
-      case 'tool_delta': {
-        const toolId = String(data.toolCallId ?? '')
-        updateAssistant(sessionId, assistantId, (item) => ({
-          ...item,
-          tools: (item.tools ?? []).map((tool) => tool.id === toolId ? { ...tool, input: (tool.input ?? '') + String(data.delta ?? '') } : tool),
-        }))
-        break
-      }
-      case 'tool_end': {
-        const toolId = String(data.toolCallId ?? '')
-        updateAssistant(sessionId, assistantId, (item) => ({
-          ...item,
-          tools: (item.tools ?? []).map((tool) => tool.id === toolId ? { ...tool, status: 'completed' } : tool),
-        }))
-        break
-      }
-      case 'tool_result_delta': {
-        const toolId = String(data.toolCallId ?? '')
-        updateAssistant(sessionId, assistantId, (item) => ({
-          ...item,
-          tools: (item.tools ?? []).map((tool) => tool.id === toolId ? { ...tool, result: (tool.result ?? '') + String(data.delta ?? '') } : tool),
-        }))
-        break
-      }
+      case 'tool_delta':
+      case 'tool_result_delta':
       case 'tool_result_end': {
         const toolId = String(data.toolCallId ?? '')
         const resultState = String(data.state ?? 'SUCCESS')
-        updateAssistant(sessionId, assistantId, (item) => ({
-          ...item,
-          tools: (item.tools ?? []).map((tool) => tool.id === toolId
-            ? { ...tool, resultState, status: resultState === 'ERROR' ? 'error' : 'completed' }
-            : tool),
-        }))
+        updateAssistant(sessionId, assistantId, (item) => updateRound(item, roundId, (round) => ({
+          ...round,
+          tools: round.tools.map((tool) => tool.id !== toolId ? tool : type === 'tool_delta'
+            ? { ...tool, input: (tool.input ?? '') + String(data.delta ?? '') }
+            : type === 'tool_result_delta'
+              ? { ...tool, result: (tool.result ?? '') + String(data.delta ?? '') }
+              : { ...tool, resultState, status: resultState === 'ERROR' ? 'error' : 'completed' }),
+        })))
         break
       }
       case 'result':
-        updateAssistant(sessionId, assistantId, (item) => ({ ...item, content: String(data.text ?? item.content) }))
+        updateAssistant(sessionId, assistantId, (item) => updateRound(item, roundId, (round) => ({ ...round, content: String(data.text ?? round.content), status: 'complete' })))
         break
       case 'error': {
         const detail = data.code === 'MAX_ITERATIONS_EXCEEDED'
@@ -197,7 +190,13 @@ export function useChatWorkspace(userId: string) {
       }
       case 'done':
         state.done = true
-        if (!state.errored) updateAssistant(sessionId, assistantId, (item) => ({ ...item, status: 'complete' }))
+        if (!state.errored) updateAssistant(sessionId, assistantId, (item) => ({
+          ...item,
+          status: 'complete',
+          rounds: item.rounds?.map((round) => round.status === 'streaming' || round.status === 'model_complete'
+            ? { ...round, status: 'complete' }
+            : round),
+        }))
         break
       default:
         break
@@ -245,6 +244,7 @@ export function useChatWorkspace(userId: string) {
       createdAt: now(),
       status: 'streaming',
       tools: [],
+      rounds: [],
       sourcePrompt: message,
     }
     setMessagesBySession((current) => ({
@@ -371,6 +371,7 @@ export function useChatWorkspace(userId: string) {
       createdAt: now(),
       status: 'streaming',
       tools: [],
+      rounds: [],
     }
     setMessagesBySession((current) => ({
       ...current,

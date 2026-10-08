@@ -66,7 +66,7 @@ public class StreamEventStore {
                 "state", STATE_RUNNING,
                 "startedAt", String.valueOf(now),
                 "hb", String.valueOf(now)));
-        redis.expire(meta, ttl);
+        redis.expire(meta, ttl); // 30m
         redis.opsForValue().set(curKey(sessionId), turnId, ttl);
     }
 

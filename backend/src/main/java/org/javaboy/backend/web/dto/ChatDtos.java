@@ -40,6 +40,16 @@ public final class ChatDtos {
             String reasoning,
             String createdAt,
             String status,
+            List<HistoryToolCall> tools,
+            List<ReActRound> rounds) {
+    }
+
+    public record ReActRound(
+            String id,
+            int index,
+            String status,
+            String content,
+            String reasoning,
             List<HistoryToolCall> tools) {
     }
 

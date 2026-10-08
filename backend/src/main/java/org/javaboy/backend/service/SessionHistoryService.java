@@ -6,6 +6,7 @@ import org.javaboy.backend.config.SreAgentProperties;
 import org.javaboy.backend.repository.ChatSessionRepository;
 import org.javaboy.backend.web.dto.ChatDtos.HistoryMessage;
 import org.javaboy.backend.web.dto.ChatDtos.HistoryToolCall;
+import org.javaboy.backend.web.dto.ChatDtos.ReActRound;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -60,7 +61,8 @@ public class SessionHistoryService {
                         .filter(text -> text != null && !text.isBlank())
                         .ifPresent(partial -> messages.add(new HistoryMessage(
                                 null, "assistant", partial, "",
-                                Instant.now().toString(), "stopped", List.of())));
+                                Instant.now().toString(), "stopped", List.of(),
+                                List.of(new ReActRound("round-1", 1, "complete", partial, "", List.of())))));
             }
             return messages;
         } catch (Exception ex) {
@@ -78,7 +80,6 @@ public class SessionHistoryService {
 
     private boolean parse(String stateData, List<HistoryMessage> messages) throws Exception {
         JsonNode root = objectMapper.readTree(stateData);
-        // MysqlAgentStateStore 可能按数组或对象落库，两种都兼容。
         if (root.isArray() && !root.isEmpty()) {
             root = root.get(0);
         }
@@ -87,39 +88,46 @@ public class SessionHistoryService {
             return false;
         }
 
-        // 工具执行结果在独立的 TOOL 轮里，先按 toolCallId 建索引，供助手轮的 tool_use 关联。
         Map<String, JsonNode> toolResults = indexToolResults(context);
-
+        JsonNode taskAnchor = null;
+        List<ReActRound> taskRounds = new ArrayList<>();
         for (JsonNode item : context) {
             String role = item.path("role").asText("");
             if ("USER".equalsIgnoreCase(role)) {
-                String text = collectText(item.path("content"));
-                messages.add(message(item, "user", text, "", List.of()));
-            } else if ("ASSISTANT".equalsIgnoreCase(role)) {
-                // 用户主动中断时，框架会追加一条 GenerateReason.INTERRUPTED 的“恢复提示”消息
-                // （"I noticed that you have interrupted me..."），它不是真实回复，回显时应过滤掉；
-                // 中断前已生成的半截正文/思考/工具调用属于另一条消息（不带 INTERRUPTED），予以保留。
-                if (isInterruptedRecovery(item)) {
-                    continue;
-                }
+                appendTaskMessage(messages, taskAnchor, taskRounds, "complete");
+                taskAnchor = null;
+                taskRounds = new ArrayList<>();
+                messages.add(message(item, "user", collectText(item.path("content")), "", List.of(), List.of()));
+            } else if ("ASSISTANT".equalsIgnoreCase(role) && !isInterruptedRecovery(item)) {
                 JsonNode content = item.path("content");
                 String text = collectText(content);
                 String reasoning = collectThinking(content);
                 List<HistoryToolCall> tools = collectTools(content, toolResults);
-                // 纯 tool_use / 纯思考（无正文）的助手轮也保留，以便展示完整过程。
                 if (!text.isBlank() || !reasoning.isBlank() || !tools.isEmpty()) {
-                    messages.add(message(item, "assistant", text, reasoning, tools));
+                    if (taskAnchor == null) {
+                        taskAnchor = item;
+                    }
+                    int index = taskRounds.size() + 1;
+                    taskRounds.add(new ReActRound("round-" + index, index, "complete", text, reasoning, tools));
                 }
             }
-            // TOOL 角色为工具执行结果，已在助手消息的工具记录中关联展示，无需单独成条。
         }
-        // 若 context 末尾是被过滤的中断恢复消息，说明最近一轮是被中断的（半截正文需兼底）。
+        appendTaskMessage(messages, taskAnchor, taskRounds, "complete");
         int size = context.size();
         if (size > 0) {
             JsonNode last = context.get(size - 1);
             return "ASSISTANT".equalsIgnoreCase(last.path("role").asText("")) && isInterruptedRecovery(last);
         }
         return false;
+    }
+
+    /** 将一条用户消息之后的所有模型调用合并为一个任务级 assistant 消息。 */
+    private void appendTaskMessage(List<HistoryMessage> messages, JsonNode anchor, List<ReActRound> rounds, String status) {
+        if (anchor == null || rounds.isEmpty()) {
+            return;
+        }
+        ReActRound lastRound = rounds.get(rounds.size() - 1);
+        messages.add(message(anchor, "assistant", lastRound.content(), "", List.of(), List.copyOf(rounds), status));
     }
 
     /** 判断某条 context 消息是否为中断产生的“恢复提示”消息。 */
@@ -147,15 +155,24 @@ public class SessionHistoryService {
         return index;
     }
 
-    private HistoryMessage message(JsonNode item, String role, String content, String reasoning, List<HistoryToolCall> tools) {
+    private HistoryMessage message(
+            JsonNode item, String role, String content, String reasoning,
+            List<HistoryToolCall> tools, List<ReActRound> rounds) {
+        return message(item, role, content, reasoning, tools, rounds, "complete");
+    }
+
+    private HistoryMessage message(
+            JsonNode item, String role, String content, String reasoning,
+            List<HistoryToolCall> tools, List<ReActRound> rounds, String status) {
         return new HistoryMessage(
                 item.path("id").asText(null),
                 role,
                 content,
                 reasoning,
                 toIso(item.path("timestamp").asText(null)),
-                "complete",
-                tools);
+                status,
+                tools,
+                rounds);
     }
 
     private String collectThinking(JsonNode content) {
