@@ -189,9 +189,7 @@ public class ChatStreamService {
             if (event instanceof ModelCallStartEvent) {
                 currentRoundId = "round-" + (++roundIndex);
             }
-            if (currentRoundId == null) {
-                currentRoundId = "round-" + (++roundIndex);
-            }
+            // AgentStartEvent 位于首个模型调用之前，不属于任何 ReAct 轮次。
             return currentRoundId;
         }
     }

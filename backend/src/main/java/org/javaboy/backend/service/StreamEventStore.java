@@ -71,7 +71,7 @@ public class StreamEventStore {
     }
 
     /** 追加一条事件 JSON，并顺带刷新 TTL（心跳由 {@link #heartbeat} 定期补）。 */
-    public void append(String sessionId, String turnId, String payloadJson) {
+        public void append(String sessionId, String turnId, String payloadJson) {
         String events = eventsKey(sessionId, turnId);
         redis.opsForList().rightPush(events, payloadJson);
         redis.expire(events, ttl);
