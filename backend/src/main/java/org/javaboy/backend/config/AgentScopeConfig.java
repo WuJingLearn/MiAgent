@@ -26,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -87,6 +88,22 @@ public class AgentScopeConfig {
                 .buildSync();
     }
 
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(prefix = "sreagent.legacy-mcp", name = "enabled", havingValue = "true")
+    public McpClientWrapper legacyMcpClient(SreAgentProperties properties) {
+        SreAgentProperties.LegacyMcp config = properties.getLegacyMcp();
+        if (config.getEndpoint() == null || config.getEndpoint().isBlank()) {
+            throw new IllegalStateException("已启用本地 Legacy MCP，但未配置 sreagent.legacy-mcp.endpoint");
+        }
+
+        Duration timeout = Duration.ofSeconds(config.getTimeoutSeconds());
+        return McpClientBuilder.create("legacy-mcp")
+                .streamableHttpTransport(config.getEndpoint())
+                .timeout(timeout)
+                .initializationTimeout(timeout)
+                .buildSync();
+    }
+
     @Bean
     public DistributedStore agentDistributedStore(DataSource dataSource, SreAgentProperties properties) {
         // MysqlDistributedStore 的默认 agentStateStore() 会把会话状态写入硬编码的 "agentscope" 库，
@@ -130,7 +147,8 @@ public class AgentScopeConfig {
             AoneSandboxRegistry aoneSandboxRegistry,
             DistributedStore agentDistributedStore,
             Optional<ContextlabSkillRepository> contextlabSkillRepository,
-            Optional<McpClientWrapper> sunfireMcpClient) {
+            @Qualifier("sunfireMcpClient") Optional<McpClientWrapper> sunfireMcpClient,
+            @Qualifier("legacyMcpClient") Optional<McpClientWrapper> legacyMcpClient) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(logQueryTool);
         sunfireMcpClient.ifPresent(client -> {
@@ -144,9 +162,22 @@ public class AgentScopeConfig {
                     .filter(tool -> client.getName().equals(tool.getClientName()))
                     .toList();
             sunfireTools.forEach(tool -> toolkit.registerAgentTool(new McpTool(
-                    tool.getName(), tool.getDescription(), toolkit.getToolSchemas(java.util.List.of(tool.getName())).getFirst().getParameters(), tool.getOutputSchema(),
+                    tool.getName(), tool.getDescription(), tool.getParameters(), tool.getOutputSchema(),
                     client, tool.getPresetArguments(), tool.getClientName(), true)));
             log.info("Sunfire MCP tools 已注册为只读，endpoint={}", properties.getSunfireMcp().getEndpoint());
+        });
+        legacyMcpClient.ifPresent(client -> {
+            toolkit.registration().mcpClient(client).apply();
+            java.util.List<McpTool> legacyTools = toolkit.getToolNames().stream()
+                    .map(toolkit::getTool)
+                    .filter(McpTool.class::isInstance)
+                    .map(McpTool.class::cast)
+                    .filter(tool -> client.getName().equals(tool.getClientName()))
+                    .toList();
+            legacyTools.forEach(tool -> toolkit.registerAgentTool(new McpTool(
+                    tool.getName(), tool.getDescription(), tool.getParameters(), tool.getOutputSchema(),
+                    client, tool.getPresetArguments(), tool.getClientName(), true)));
+            log.info("本地 Legacy MCP tools 已注册为只读，endpoint={}", properties.getLegacyMcp().getEndpoint());
         });
 
         SreAgentProperties.Sandbox sandbox = properties.getSandbox();
