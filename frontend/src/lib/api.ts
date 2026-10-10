@@ -98,6 +98,30 @@ export async function openMessageStream(
   return response
 }
 
+/** 提交工具确认结果并打开用于继续 Agent 执行的 SSE 流。 */
+export async function confirmToolCallStream(
+  userId: string,
+  sessionId: string,
+  toolCallIds: string[],
+  confirmed: boolean,
+  requestId: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  const response = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/confirm`, {
+    method: 'POST',
+    headers: {
+      'Accept': 'text/event-stream',
+      'Content-Type': 'application/json',
+      'X-User-Id': userId,
+    },
+    body: JSON.stringify({ toolCallIds, confirmed, requestId }),
+    signal,
+  })
+  if (!response.ok) await throwApiError(response)
+  if (!response.body) throw new ApiError(502, '服务端未返回可读取的确认流。')
+  return response
+}
+
 export interface StreamStatus {
   state: string
   turnId: string | null

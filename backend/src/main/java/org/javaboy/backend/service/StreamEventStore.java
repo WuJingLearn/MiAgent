@@ -28,6 +28,8 @@ public class StreamEventStore {
     public static final String STATE_RUNNING = "running";
     public static final String STATE_DONE = "done";
     public static final String STATE_FAILED = "failed";
+    /** Agent 已暂停，等待用户对工具调用作出确认。 */
+    public static final String STATE_AWAITING_CONFIRMATION = "awaiting_confirmation";
     /** 派生态：running 但心跳超时，通常意味着持有该轮的实例已宕机。 */
     public static final String STATE_STALE = "stale";
     /** 派生态：没有任何缓冲记录。 */
@@ -93,6 +95,10 @@ public class StreamEventStore {
 
     public void markFailed(String sessionId, String turnId) {
         setState(sessionId, turnId, STATE_FAILED);
+    }
+
+    public void markAwaitingConfirmation(String sessionId, String turnId) {
+        setState(sessionId, turnId, STATE_AWAITING_CONFIRMATION);
     }
 
     private void setState(String sessionId, String turnId, String state) {

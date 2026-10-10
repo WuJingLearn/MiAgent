@@ -12,6 +12,7 @@ import org.javaboy.backend.service.ChatStreamService;
 import org.javaboy.backend.service.SessionHistoryService;
 import org.javaboy.backend.service.StreamEventStore;
 import org.javaboy.backend.web.dto.ChatDtos.ChatMessageRequest;
+import org.javaboy.backend.web.dto.ChatDtos.ConfirmToolRequest;
 import org.javaboy.backend.web.dto.ChatDtos.CreateSessionRequest;
 import org.javaboy.backend.web.dto.ChatDtos.HistoryMessage;
 import org.javaboy.backend.web.dto.ChatDtos.ReconnectRequest;
@@ -90,6 +91,30 @@ public class ChatController {
 
         // 启动后台生成（写入 Redis 事件缓冲），返回 turnId（复用 requestId）
         String turnId = chatStreamService.startTurn(userId, sessionId, request.requestId(), request.message(), context);
+
+        SseEmitter emitter = new SseEmitter(0L);
+        AtomicBoolean disconnected = new AtomicBoolean(false);
+        emitter.onError(error -> disconnected.set(true));
+        emitter.onTimeout(() -> disconnected.set(true));
+        emitter.onCompletion(() -> disconnected.set(true));
+        chatStreamService.attach(emitter, sessionId, turnId, 0L, disconnected);
+        return emitter;
+    }
+
+    /**
+     * 对等待人工确认的工具调用作出批准或拒绝决定，并以新的 SSE 流继续同一个 Agent 会话。
+     */
+    @PostMapping(value = "/{sessionId}/confirm", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter confirmToolCall(
+            HttpServletRequest servletRequest,
+            @PathVariable String sessionId,
+            @Valid @RequestBody ConfirmToolRequest request) {
+        String userId = userIdentityResolver.resolve(servletRequest);
+        sessionService.requireOwned(sessionId, userId);
+        chatStreamService.validatePendingConfirmations(userId, sessionId, request.toolCallIds());
+        RuntimeContext context = chatService.prepareConfirmation(userId, sessionId, request.requestId());
+        String turnId = chatStreamService.resumeAfterConfirmation(
+                userId, sessionId, request.requestId(), context, request.toolCallIds(), request.confirmed());
 
         SseEmitter emitter = new SseEmitter(0L);
         AtomicBoolean disconnected = new AtomicBoolean(false);

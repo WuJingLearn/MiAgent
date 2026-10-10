@@ -30,6 +30,7 @@ public class SreAgentProperties {
     private ModelRetry modelRetry = new ModelRetry();
     private Sandbox sandbox = new Sandbox();
     private ContextlabSkill contextlab = new ContextlabSkill();
+    private SunfireMcp sunfireMcp = new SunfireMcp();
     private Stream stream = new Stream();
 
     public String getName() {
@@ -182,6 +183,14 @@ public class SreAgentProperties {
 
     public void setContextlab(ContextlabSkill contextlab) {
         this.contextlab = contextlab;
+    }
+
+    public SunfireMcp getSunfireMcp() {
+        return sunfireMcp;
+    }
+
+    public void setSunfireMcp(SunfireMcp sunfireMcp) {
+        this.sunfireMcp = sunfireMcp;
     }
 
     public Stream getStream() {
@@ -412,6 +421,45 @@ public class SreAgentProperties {
 
         public void setMaxOutputChars(int maxOutputChars) {
             this.maxOutputChars = maxOutputChars;
+        }
+    }
+
+    public static class SunfireMcp {
+        private boolean enabled;
+        private String endpoint = "https://mcp.alibaba-inc.com/sunfire-mcp/mcp";
+        private String privateToken;
+        private int timeoutSeconds = 60;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getEndpoint() {
+            return endpoint;
+        }
+
+        public void setEndpoint(String endpoint) {
+            this.endpoint = endpoint;
+        }
+
+        public String getPrivateToken() {
+            return privateToken;
+        }
+
+        public void setPrivateToken(String privateToken) {
+            this.privateToken = privateToken;
+        }
+
+        public int getTimeoutSeconds() {
+            return timeoutSeconds;
+        }
+
+        public void setTimeoutSeconds(int timeoutSeconds) {
+            this.timeoutSeconds = timeoutSeconds;
         }
     }
 

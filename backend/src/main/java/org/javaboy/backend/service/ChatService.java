@@ -50,13 +50,31 @@ public class ChatService {
      * @return 传给 Agent 的运行时上下文（携带用户、会话与所选模型）
      */
     public RuntimeContext prepare(String userId, String sessionId, String requestId) {
+        ChatSession session = requireOpenSession(userId, sessionId);
+        if (!sessionRepository.startTurn(sessionId, requestId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "重复的 requestId");
+        }
+        return contextFor(userId, sessionId, session);
+    }
+
+    /** 为人工确认后的恢复调用登记一个独立的流式 turn。 */
+    public RuntimeContext prepareConfirmation(String userId, String sessionId, String requestId) {
+        ChatSession session = requireOpenSession(userId, sessionId);
+        if (!sessionRepository.startTurn(sessionId, requestId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "重复的 requestId");
+        }
+        return contextFor(userId, sessionId, session);
+    }
+
+    private ChatSession requireOpenSession(String userId, String sessionId) {
         ChatSession session = sessionService.requireOwned(sessionId, userId);
         if (!"OPEN".equals(session.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "会话已关闭");
         }
-        if (!sessionRepository.startTurn(sessionId, requestId)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "重复的 requestId");
-        }
+        return session;
+    }
+
+    private RuntimeContext contextFor(String userId, String sessionId, ChatSession session) {
         return RuntimeContext.builder()
                 .userId(userId)
                 .sessionId(sessionId)

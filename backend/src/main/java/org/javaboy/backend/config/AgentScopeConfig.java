@@ -9,6 +9,9 @@ import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig;
 import io.agentscope.core.tool.Toolkit;
+import io.agentscope.core.tool.mcp.McpClientBuilder;
+import io.agentscope.core.tool.mcp.McpClientWrapper;
+import io.agentscope.core.tool.mcp.McpTool;
 import io.agentscope.harness.agent.sandbox.SandboxExecutionGuard;
 import io.agentscope.harness.agent.sandbox.snapshot.SandboxSnapshotSpec;
 import org.javaboy.backend.agent.LogQueryTool;
@@ -28,6 +31,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import javax.sql.DataSource;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 
@@ -61,6 +65,26 @@ public class AgentScopeConfig {
             SreAgentProperties properties,
             AoneSandboxRegistry aoneSandboxRegistry) {
         return new ContextlabSkillRepository(client, properties, aoneSandboxRegistry);
+    }
+
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(prefix = "sreagent.sunfire-mcp", name = "enabled", havingValue = "true")
+    public McpClientWrapper sunfireMcpClient(SreAgentProperties properties) {
+        SreAgentProperties.SunfireMcp config = properties.getSunfireMcp();
+        if (config.getPrivateToken() == null || config.getPrivateToken().isBlank()) {
+            throw new IllegalStateException("已启用 Sunfire MCP，但未配置 sreagent.sunfire-mcp.private-token");
+        }
+        if (config.getEndpoint() == null || config.getEndpoint().isBlank()) {
+            throw new IllegalStateException("已启用 Sunfire MCP，但未配置 sreagent.sunfire-mcp.endpoint");
+        }
+
+        Duration timeout = Duration.ofSeconds(config.getTimeoutSeconds());
+        return McpClientBuilder.create("sunfire-mcp")
+                .streamableHttpTransport(config.getEndpoint())
+                .header("PRIVATE-TOKEN", config.getPrivateToken())
+                .timeout(timeout)
+                .initializationTimeout(timeout)
+                .buildSync();
     }
 
     @Bean
@@ -105,9 +129,25 @@ public class AgentScopeConfig {
             LogQueryTool logQueryTool,
             AoneSandboxRegistry aoneSandboxRegistry,
             DistributedStore agentDistributedStore,
-            Optional<ContextlabSkillRepository> contextlabSkillRepository) {
+            Optional<ContextlabSkillRepository> contextlabSkillRepository,
+            Optional<McpClientWrapper> sunfireMcpClient) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(logQueryTool);
+        sunfireMcpClient.ifPresent(client -> {
+            toolkit.registration().mcpClient(client).apply();
+            // Sunfire MCP 当前只接入查询能力；服务端未声明 readOnlyHint 的工具也统一按只读处理，
+            // 避免 AgentScope 将它们默认判为需要人工确认的写操作。
+            java.util.List<McpTool> sunfireTools = toolkit.getToolNames().stream()
+                    .map(toolkit::getTool)
+                    .filter(McpTool.class::isInstance)
+                    .map(McpTool.class::cast)
+                    .filter(tool -> client.getName().equals(tool.getClientName()))
+                    .toList();
+            sunfireTools.forEach(tool -> toolkit.registerAgentTool(new McpTool(
+                    tool.getName(), tool.getDescription(), toolkit.getToolSchemas(java.util.List.of(tool.getName())).getFirst().getParameters(), tool.getOutputSchema(),
+                    client, tool.getPresetArguments(), tool.getClientName(), true)));
+            log.info("Sunfire MCP tools 已注册为只读，endpoint={}", properties.getSunfireMcp().getEndpoint());
+        });
 
         SreAgentProperties.Sandbox sandbox = properties.getSandbox();
         boolean sandboxEnabled = sandbox.isEnabled()

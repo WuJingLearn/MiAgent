@@ -92,7 +92,11 @@ function App() {
               onSelectPrompt={setDraft}
             />
           ) : (
-            <MessageList messages={workspace.messages} onRetry={(prompt) => void workspace.sendMessage(prompt)} />
+            <MessageList
+              messages={workspace.messages}
+              onRetry={(prompt) => void workspace.sendMessage(prompt)}
+              onConfirmToolCall={(toolCallId, confirmed) => void workspace.confirmToolCall(toolCallId, confirmed)}
+            />
           )}
         </section>
 

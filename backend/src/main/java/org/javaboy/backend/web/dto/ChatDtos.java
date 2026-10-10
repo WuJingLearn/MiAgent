@@ -21,6 +21,13 @@ public final class ChatDtos {
             @NotBlank @Size(max = 100) String requestId) {
     }
 
+    /** 对当前会话中等待人工确认的工具调用作出批准或拒绝决定。 */
+    public record ConfirmToolRequest(
+            @NotBlank @Size(max = 100) String requestId,
+            @NotBlank List<@NotBlank @Size(max = 200) String> toolCallIds,
+            boolean confirmed) {
+    }
+
     public record SessionResponse(
             String sessionId,
             String modelKey,

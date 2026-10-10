@@ -19,7 +19,7 @@ export interface ProblemDetail {
   detail?: string
 }
 
-export type ToolCallStatus = 'running' | 'completed' | 'error'
+export type ToolCallStatus = 'running' | 'awaiting_confirmation' | 'completed' | 'error'
 
 export interface ToolCallState {
   id: string
@@ -28,6 +28,7 @@ export interface ToolCallState {
   input?: string
   result?: string
   resultState?: string
+  confirmationMessage?: string
 }
 
 export type ReActRoundStatus = 'streaming' | 'model_complete' | 'complete' | 'error'
@@ -47,7 +48,7 @@ export interface ChatMessage {
   content: string
   reasoning?: string
   createdAt: string
-  status?: 'streaming' | 'complete' | 'stopped' | 'error'
+  status?: 'streaming' | 'awaiting_confirmation' | 'complete' | 'stopped' | 'error'
   tools?: ToolCallState[]
   rounds?: ReActRound[]
   error?: string

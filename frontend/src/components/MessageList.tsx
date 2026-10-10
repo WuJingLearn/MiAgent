@@ -8,6 +8,7 @@ import type { ChatMessage, ReActRound } from '@/types'
 interface MessageListProps {
   messages: ChatMessage[]
   onRetry: (prompt: string) => void
+  onConfirmToolCall: (toolCallId: string, confirmed: boolean) => void
 }
 
 function MessageActions({ content }: { content: string }) {
@@ -20,6 +21,7 @@ function MessageActions({ content }: { content: string }) {
 
 function ToolStatusIcon({ status }: { status: string }) {
   if (status === 'running') return <LoaderCircle size={15} />
+  if (status === 'awaiting_confirmation') return <TriangleAlert size={15} />
   if (status === 'error') return <TriangleAlert size={15} />
   return <CheckCircle2 size={15} />
 }
@@ -33,7 +35,7 @@ function formatToolInput(input?: string) {
   }
 }
 
-function ReActRoundView({ round }: { round: ReActRound }) {
+function ReActRoundView({ round, onConfirmToolCall }: { round: ReActRound; onConfirmToolCall: (toolCallId: string, confirmed: boolean) => void }) {
   return (
     <section className={`react-round is-${round.status}`}>
       <div className="react-round-title"><span>第 {round.index} 轮 ReAct</span><span>{round.status === 'streaming' ? '推理中' : round.status === 'model_complete' ? '执行工具中' : round.status === 'error' ? '执行失败' : '已完成'}</span></div>
@@ -42,15 +44,16 @@ function ReActRoundView({ round }: { round: ReActRound }) {
         {round.tools.map((tool) => {
           const input = formatToolInput(tool.input)
           const hasDetail = Boolean(input) || Boolean(tool.result)
-          const statusLabel = tool.status === 'running' ? '调用中' : tool.status === 'error' ? '执行失败' : '已完成'
+          const statusLabel = tool.status === 'running' ? '调用中' : tool.status === 'awaiting_confirmation' ? '等待确认' : tool.status === 'error' ? '执行失败' : '已完成'
           const header = <><ToolStatusIcon status={tool.status} /><Wrench size={14} /><code>{tool.name}</code><span>{statusLabel}</span></>
           const detail = <div className="tool-detail">
             {input && <div className="tool-detail-part"><span className="tool-detail-label">入参</span><pre>{input}</pre></div>}
             {tool.result && <div className="tool-detail-part"><span className="tool-detail-label">结果</span><pre>{tool.result}</pre></div>}
           </div>
           const className = `tool-card ${tool.status === 'running' ? 'is-running' : ''} ${tool.status === 'error' ? 'is-error' : ''}`
-          return hasDetail ? <details className={className} key={tool.id} open={round.status === 'streaming'}><summary className="tool-row">{header}</summary>{detail}</details>
-            : <div className={className} key={tool.id}><div className="tool-row">{header}</div></div>
+          const confirmation = tool.status === 'awaiting_confirmation' && <div className="tool-confirmation"><p>{tool.confirmationMessage}</p><Button onClick={() => onConfirmToolCall(tool.id, true)}>允许执行</Button><Button className="is-quiet" onClick={() => onConfirmToolCall(tool.id, false)}>拒绝</Button></div>
+          return hasDetail ? <details className={className} key={tool.id} open={round.status === 'streaming' || tool.status === 'awaiting_confirmation'}><summary className="tool-row">{header}</summary>{detail}{confirmation}</details>
+            : <div className={className} key={tool.id}><div className="tool-row">{header}</div>{confirmation}</div>
         })}
       </div>}
       {round.content && <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{round.content}</ReactMarkdown></div>}
@@ -58,7 +61,7 @@ function ReActRoundView({ round }: { round: ReActRound }) {
   )
 }
 
-export function MessageList({ messages, onRetry }: MessageListProps) {
+export function MessageList({ messages, onRetry, onConfirmToolCall }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -81,7 +84,7 @@ export function MessageList({ messages, onRetry }: MessageListProps) {
 
             {message.role === 'assistant' ? (
               message.rounds && message.rounds.length > 0
-                ? <div className="react-round-list">{message.rounds.map((round) => <ReActRoundView key={round.id} round={round} />)}</div>
+                ? <div className="react-round-list">{message.rounds.map((round) => <ReActRoundView key={round.id} round={round} onConfirmToolCall={onConfirmToolCall} />)}</div>
                 : <div className={`markdown-body ${message.status === 'streaming' ? 'is-streaming' : ''}`}>
                     {message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown> : message.status === 'streaming' ? <span className="thinking-line">正在组织诊断思路</span> : null}
                   </div>

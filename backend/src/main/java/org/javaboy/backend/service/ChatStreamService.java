@@ -4,11 +4,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.AgentResultEvent;
+import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.event.ModelCallStartEvent;
+import io.agentscope.core.event.RequireUserConfirmEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.message.GenerateReason;
 import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.ToolCallState;
+import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.message.UserMessage;
+import io.agentscope.core.state.AgentState;
 import io.agentscope.harness.agent.HarnessAgent;
 import org.javaboy.backend.config.SreAgentProperties;
 import org.javaboy.backend.repository.ChatSessionRepository;
@@ -87,12 +92,33 @@ public class ChatStreamService {
      * 调用方随后用 {@link #attach} 建立 tail 观看输出。
      */
     public String startTurn(String userId, String sessionId, String requestId, String message, RuntimeContext context) {
+        return startTurn(userId, sessionId, requestId, new UserMessage(message), context);
+    }
+
+    /** 校验客户端提交的确认目标仍处于当前会话的待确认状态。 */
+    public void validatePendingConfirmations(String userId, String sessionId, List<String> toolCallIds) {
+        pendingConfirmations(userId, sessionId, toolCallIds, true);
+    }
+
+    /** 以确认结果恢复已暂停的 ReAct 循环。 */
+    public String resumeAfterConfirmation(
+            String userId, String sessionId, String requestId, RuntimeContext context,
+            List<String> toolCallIds, boolean confirmed) {
+        List<ConfirmResult> results = pendingConfirmations(userId, sessionId, toolCallIds, confirmed);
+        UserMessage message = UserMessage.builder()
+                .textContent("")
+                .metadata(java.util.Map.of(Msg.METADATA_CONFIRM_RESULTS, results))
+                .build();
+        return startTurn(userId, sessionId, requestId, message, context);
+    }
+
+    private String startTurn(String userId, String sessionId, String requestId, UserMessage message, RuntimeContext context) {
         store.register(sessionId, requestId);
         chatStreamExecutor.execute(() -> runGeneration(userId, sessionId, requestId, message, context));
         return requestId;
     }
 
-    private void runGeneration(String userId, String sessionId, String requestId, String message, RuntimeContext context) {
+    private void runGeneration(String userId, String sessionId, String requestId, UserMessage message, RuntimeContext context) {
         // 5s
         int heartbeatSeconds = properties.getStream().getHeartbeatSeconds();
         ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(
@@ -109,11 +135,12 @@ public class ChatStreamService {
         StringBuilder streamed = new StringBuilder();
         String resultText = null;
         boolean interrupted = false;
+        boolean awaitingConfirmation = false;
         boolean finalized = false;
         ReActRoundTracker rounds = new ReActRoundTracker();
         try {
             lease = leaseService.acquire(userId, sessionId, properties.getSessionLockSeconds()).block();
-            try (Stream<AgentEvent> events = agent.streamEvents(new UserMessage(message), context).toStream()) {
+            try (Stream<AgentEvent> events = agent.streamEvents(message, context).toStream()) {
                 var iterator = events.iterator();
                 while (iterator.hasNext()) {
                     AgentEvent event = iterator.next();
@@ -127,19 +154,31 @@ public class ChatStreamService {
                             resultText = resultMsg.getTextContent();
                         }
                     }
-                    mapper.mapToPayload(event, rounds.roundIdFor(event))
-                            .ifPresent(payload -> appendPayload(sessionId, requestId, payload));
+                    if (event instanceof RequireUserConfirmEvent) {
+                        awaitingConfirmation = true;
+                    }
+                    // 确认暂停会在 AgentEnd 后结束当前流，但不能向前端发送 done，
+                    // 否则 UI 会把待确认工具误判为已完成。
+                    if (!(awaitingConfirmation && event instanceof io.agentscope.core.event.AgentEndEvent)) {
+                        mapper.mapToPayload(event, rounds.roundIdFor(event))
+                                .ifPresent(payload -> appendPayload(sessionId, requestId, payload));
+                    }
 
                     // 方案A：AgentResultEvent(agentEnd) 是语义上的「回答结束」点。收到即落库并标记 DONE，
                     // 让前端 tail 立刻收尾，不再等待 MemoryFlushMiddleware 的 concatWith 把整条流拖到 flush 完成。
                     // 长期记忆的 flush/offload 仍随流在后台自然跑完；lease 到循环结束才释放，避免同会话并发 flush 竞争。
-                    if (event instanceof AgentResultEvent && !finalized) {
+                    if (event instanceof AgentResultEvent && !finalized && !awaitingConfirmation) {
                         finalizeTurn(sessionId, requestId, resultText, streamed, interrupted);
                         finalized = true;
                     }
                 }
             }
-            if (!finalized) {
+            if (awaitingConfirmation) {
+                // 当前 chat_turn 保存已产生的文本，AgentScope 的 ASKING 状态则由其 state store 持久化。
+                finalizeTurn(sessionId, requestId, resultText, streamed, false);
+                finalized = true;
+                store.markAwaitingConfirmation(sessionId, requestId);
+            } else if (!finalized) {
                 // 兜底：整条流结束都没出现 AgentResultEvent（异常情况），按原逻辑收尾一次。
                 finalizeTurn(sessionId, requestId, resultText, streamed, interrupted);
                 finalized = true;
@@ -178,6 +217,23 @@ public class ChatStreamService {
         store.markDone(sessionId, requestId);
         log.info("流式生成结束 sessionId={} requestId={} interrupted={} length={}",
                 sessionId, requestId, interrupted, finalResponse.length());
+    }
+
+    private List<ConfirmResult> pendingConfirmations(
+            String userId, String sessionId, List<String> toolCallIds, boolean confirmed) {
+        AgentState state = agent.getDelegate().getAgentState(userId, sessionId);
+        List<ToolUseBlock> pending = state.getContext().stream()
+                .filter(msg -> msg.getRole() == io.agentscope.core.message.MsgRole.ASSISTANT)
+                .flatMap(msg -> msg.getContentBlocks(ToolUseBlock.class).stream())
+                .filter(tool -> tool.getState() == ToolCallState.ASKING)
+                .toList();
+        java.util.Set<String> requested = new java.util.HashSet<>(toolCallIds);
+        List<ToolUseBlock> selected = pending.stream().filter(tool -> requested.contains(tool.getId())).toList();
+        if (selected.isEmpty() || selected.size() != requested.size()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT, "待确认的工具调用不存在或已处理");
+        }
+        return selected.stream().map(tool -> new ConfirmResult(confirmed, tool)).toList();
     }
 
     /** 每次生成独有的轮次上下文，禁止放进单例 Mapper，避免并发会话混用轮次。 */
@@ -224,7 +280,9 @@ public class ChatStreamService {
                     offset++;
                 }
                 String state = status.state();
-                if (StreamEventStore.STATE_DONE.equals(state) || StreamEventStore.STATE_FAILED.equals(state)) {
+                if (StreamEventStore.STATE_DONE.equals(state)
+                        || StreamEventStore.STATE_FAILED.equals(state)
+                        || StreamEventStore.STATE_AWAITING_CONFIRMATION.equals(state)) {
                     break;
                 }
                 if (StreamEventStore.STATE_STALE.equals(state) || StreamEventStore.STATE_NONE.equals(state)) {

@@ -6,6 +6,7 @@ import io.agentscope.core.event.AgentResultEvent;
 import io.agentscope.core.event.ExceedMaxItersEvent;
 import io.agentscope.core.event.ModelCallEndEvent;
 import io.agentscope.core.event.ModelCallStartEvent;
+import io.agentscope.core.event.RequireUserConfirmEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.event.TextBlockEndEvent;
 import io.agentscope.core.event.TextBlockStartEvent;
@@ -78,9 +79,15 @@ public class AgentEventSseMapper {
         } else if (event instanceof ToolResultEndEvent result) {
             ToolResultState state = result.getState();
             payload = new SsePayload("tool_result_end", event.getId(), data(roundId, "toolCallId", result.getToolCallId(), "state", state == null ? "SUCCESS" : state.name()));
+        } else if (event instanceof RequireUserConfirmEvent confirmation) {
+            payload = new SsePayload("confirm_required", event.getId(), data(roundId,
+                    "replyId", confirmation.getReplyId(),
+                    "tools", confirmation.getToolCalls().stream().map(tool -> Map.of(
+                            "toolCallId", tool.getId(), "toolName", tool.getName(), "input", tool.getInput())).toList()));
         } else if (event instanceof AgentResultEvent result) {
             Msg resultMsg = result.getResult();
-            if (resultMsg != null && resultMsg.getGenerateReason() == GenerateReason.INTERRUPTED) return Optional.empty();
+            if (resultMsg != null && (resultMsg.getGenerateReason() == GenerateReason.INTERRUPTED
+                    || resultMsg.getGenerateReason() == GenerateReason.PERMISSION_ASKING)) return Optional.empty();
             payload = new SsePayload("result", event.getId(), data(roundId, "text", resultMsg == null ? "" : nullToEmpty(resultMsg.getTextContent())));
         } else if (event instanceof AgentEndEvent) {
             payload = new SsePayload("done", event.getId(), data(roundId));

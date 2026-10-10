@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  confirmToolCallStream,
   createSession,
   fetchModels,
   fetchSessionMessages,
@@ -30,6 +31,7 @@ function updateRound(message: ChatMessage, roundId: string, updater: (round: ReA
 /** 一轮流式消费的累积状态，供事件处理器与调用方共享。 */
 interface StreamState {
   done: boolean
+  awaitingConfirmation: boolean
   errored: boolean
   errorDetail: string
 }
@@ -56,6 +58,8 @@ export function useChatWorkspace(userId: string) {
   const streamingSessionRef = useRef<{ sessionId: string; assistantId: string } | null>(null)
   // 正在探测/续流的会话，避免重复 resume
   const resumeSessionRef = useRef<string | null>(null)
+  // SSE 在确认暂停后已结束，仍需记住对应助手气泡以继续渲染。
+  const pendingConfirmationRef = useRef<{ sessionId: string; assistantId: string } | null>(null)
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.sessionId === activeSessionId) ?? null,
@@ -161,6 +165,23 @@ export function useChatWorkspace(userId: string) {
         updateAssistant(sessionId, assistantId, (item) => updateRound(item, roundId, (round) => ({ ...round, tools: [...round.tools, tool] })))
         break
       }
+      case 'confirm_required': {
+        const requestedTools = Array.isArray(data.tools) ? data.tools as Array<Record<string, unknown>> : []
+        const requestedIds = new Set(requestedTools.map((tool) => String(tool.toolCallId ?? '')))
+        state.awaitingConfirmation = true
+        pendingConfirmationRef.current = { sessionId, assistantId }
+        updateAssistant(sessionId, assistantId, (item) => ({
+          ...item,
+          status: 'awaiting_confirmation',
+          rounds: item.rounds?.map((round) => ({
+            ...round,
+            tools: round.tools.map((tool) => requestedIds.has(tool.id)
+              ? { ...tool, status: 'awaiting_confirmation', confirmationMessage: '该工具需要你的确认后才会执行。' }
+              : tool),
+          })),
+        }))
+        break
+      }
       case 'tool_delta':
       case 'tool_result_delta':
       case 'tool_result_end': {
@@ -190,7 +211,7 @@ export function useChatWorkspace(userId: string) {
       }
       case 'done':
         state.done = true
-        if (!state.errored) updateAssistant(sessionId, assistantId, (item) => ({
+        if (!state.errored && !state.awaitingConfirmation) updateAssistant(sessionId, assistantId, (item) => ({
           ...item,
           status: 'complete',
           rounds: item.rounds?.map((round) => round.status === 'streaming' || round.status === 'model_complete'
@@ -257,14 +278,14 @@ export function useChatWorkspace(userId: string) {
     const controller = new AbortController()
     streamController.current = controller
     streamingSessionRef.current = { sessionId, assistantId }
-    const state: StreamState = { done: false, errored: false, errorDetail: '' }
+    const state: StreamState = { done: false, awaitingConfirmation: false, errored: false, errorDetail: '' }
 
     try {
       const response = await openMessageStream(userId, sessionId, message, makeId(), controller.signal)
       await consumeSseStream(response.body!, (eventName, envelope: StreamEnvelope) => {
         applyStreamEvent(sessionId, assistantId, state, eventName, envelope)
       })
-      if (!state.done && !state.errored) updateAssistant(sessionId, assistantId, (item) => ({ ...item, status: 'complete' }))
+      if (!state.done && !state.errored && !state.awaitingConfirmation) updateAssistant(sessionId, assistantId, (item) => ({ ...item, status: 'complete' }))
       if (state.errored) setError(state.errorDetail)
       setSessions((current) => current.map((item) => item.sessionId === sessionId ? { ...item, updatedAt: now() } : item))
     } catch (cause) {
@@ -285,12 +306,46 @@ export function useChatWorkspace(userId: string) {
     }
   }, [activeSession, applyStreamEvent, createNewSession, updateAssistant, userId])
 
+  /** 对一项待确认工具作出决定，并在同一助手气泡中继续展示 Agent 输出。 */
+  const confirmToolCall = useCallback(async (toolCallId: string, confirmed: boolean) => {
+    const info = pendingConfirmationRef.current
+    if (!info || isStreamingRef.current) return
+    const { sessionId, assistantId } = info
+    const controller = new AbortController()
+    streamController.current = controller
+    isStreamingRef.current = true
+    setIsStreaming(true)
+    updateAssistant(sessionId, assistantId, (item) => ({ ...item, status: 'streaming', error: undefined }))
+    const state: StreamState = { done: false, awaitingConfirmation: false, errored: false, errorDetail: '' }
+    try {
+      const response = await confirmToolCallStream(userId, sessionId, [toolCallId], confirmed, makeId(), controller.signal)
+      await consumeSseStream(response.body!, (eventName, envelope: StreamEnvelope) => {
+        applyStreamEvent(sessionId, assistantId, state, eventName, envelope)
+      })
+      if (!state.done && !state.errored && !state.awaitingConfirmation) {
+        updateAssistant(sessionId, assistantId, (item) => ({ ...item, status: 'complete' }))
+      }
+      if (state.errored) setError(state.errorDetail)
+      if (!state.awaitingConfirmation) pendingConfirmationRef.current = null
+    } catch (cause) {
+      if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
+        const detail = cause instanceof Error ? cause.message : '提交工具确认失败。'
+        updateAssistant(sessionId, assistantId, (item) => ({ ...item, status: 'awaiting_confirmation', error: detail }))
+        setError(detail)
+      }
+    } finally {
+      streamController.current = null
+      isStreamingRef.current = false
+      setIsStreaming(false)
+    }
+  }, [applyStreamEvent, updateAssistant, userId])
+
   /**
    * 带退避重连的续流：从缓冲 offset 起回放并持续 tail，直到本轮结束、出错或客户端中止。
    * 网络抖动导致的意外断流会自动重连（offset 续读，不重复累积内容）。
    */
   const runReconnect = useCallback(async (sessionId: string, turnId: string, assistantId: string, signal: AbortSignal) => {
-    const state: StreamState = { done: false, errored: false, errorDetail: '' }
+    const state: StreamState = { done: false, awaitingConfirmation: false, errored: false, errorDetail: '' }
     let offset = 0
     let attempt = 0
     const backoff = () => sleep(Math.min(1000 * 2 ** attempt, 5000))
@@ -457,6 +512,7 @@ export function useChatWorkspace(userId: string) {
     selectSession,
     createNewSession,
     sendMessage,
+    confirmToolCall,
     stopStreaming,
   }
 }

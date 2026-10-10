@@ -1,8 +1,10 @@
 package org.javaboy.backend.web;
 
 import io.agentscope.core.event.ModelCallStartEvent;
+import io.agentscope.core.event.RequireUserConfirmEvent;
 import io.agentscope.core.event.ThinkingBlockDeltaEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
+import io.agentscope.core.message.ToolUseBlock;
 import org.javaboy.backend.web.dto.ChatDtos.SsePayload;
 import org.junit.jupiter.api.Test;
 
@@ -28,5 +30,19 @@ class AgentEventSseMapperTests {
         assertEquals("round-1", ((Map<?, ?>) thinking.data()).get("roundId"));
         assertEquals("分析中", ((Map<?, ?>) thinking.data()).get("delta"));
         assertEquals("tool-1", ((Map<?, ?>) tool.data()).get("toolCallId"));
+    }
+
+    @Test
+    void mapsUserConfirmationRequestWithToolDetails() {
+        ToolUseBlock tool = new ToolUseBlock("tool-1", "query_metrics", Map.of("app", "upper"));
+        SsePayload payload = mapper.mapToPayload(
+                new RequireUserConfirmEvent("reply-1", java.util.List.of(tool)), "round-1").orElseThrow();
+
+        assertEquals("confirm_required", payload.type());
+        Map<?, ?> data = (Map<?, ?>) payload.data();
+        assertEquals("reply-1", data.get("replyId"));
+        Map<?, ?> serializedTool = (Map<?, ?>) ((java.util.List<?>) data.get("tools")).getFirst();
+        assertEquals("tool-1", serializedTool.get("toolCallId"));
+        assertEquals("query_metrics", serializedTool.get("toolName"));
     }
 }
