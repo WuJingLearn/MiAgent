@@ -138,6 +138,36 @@ Client                                      Server
 - **SSE 连接**：已建立的 SSE 流仍必须由处理该流的副本持续持有；代理需要关闭响应缓冲、配置超时和 keep-alive。
 - **弹性与发布**：优雅下线需停止新 session、等待或迁移现有流，并确保重连副本能读取 session/事件状态。
 
+### 3.6 网关、多副本与重启恢复
+
+旧版 Streamable HTTP 的 `MCP-Session-Id` 是协议会话的引用，而不是状态副本。若 MCP Server 将 session 只存放在单个 JVM 内存中，多副本部署至少需要保证后续请求被路由回创建该 session 的实例：
+
+```text
+Client -- sessionId --> MCP 网关 / 负载均衡器 -- sessionId → 实例 A
+                                                     │
+                                                     └─ 实例 A 的内存 session
+```
+
+网关可以维护 `sessionId → 后端实例` 映射并实现会话亲和；也可以由 MCP Server 将 session 存入 Redis、数据库等共享存储，使任一副本均可处理请求。前者解决“请求路由到哪里”，后者解决“状态在哪里”，两者不能互相替代。
+
+如果实例 A 重启，其内存 session 会丢失。即使网关仍将旧 `sessionId` 路由到 A，A 也必须将该请求视为未知 session 并返回 `404` 或 session terminated 错误。Client 的恢复流程为：
+
+```text
+Client -- tools/call + 旧 sessionId --> Server
+Client <-- 404 / session terminated ---- Server
+Client -- initialize（不带 sessionId）--> Server
+Client <-- 新 sessionId ---------------- Server
+Client -- notifications/initialized ----> Server
+Client -- 重试原 tools/call（新 sessionId）-> Server
+```
+
+接入 MCP 网关后，应区分两层状态：
+
+- **SreAgent ↔ 网关的 MCP 协议 session**：对 SreAgent 而言，网关是 MCP Server；网关负责其对外 session 的路由、终止与恢复。SreAgent 无须仅为 MCP 协议 session 对自己的入站用户请求做 Pod 粘滞。
+- **网关 ↔ Provider 的下游状态**：网关若代理多副本 Provider，Provider 的业务状态不能仅依赖 JVM 内存，除非网关明确保障下游亲和。更稳妥的做法是根据网关传递的 `sessionKey` 将业务状态放入共享存储。
+
+部分网关可在发现下游实例重启后透明地重建下游会话；若未提供该能力，Client 仍需处理旧 session 失效并重新初始化。会话亲和本身不具备状态恢复能力。
+
 ## 4. `2026-07-28`：最新 Streamable HTTP 的无状态模型
 
 ### 4.1 工作模式：请求自包含

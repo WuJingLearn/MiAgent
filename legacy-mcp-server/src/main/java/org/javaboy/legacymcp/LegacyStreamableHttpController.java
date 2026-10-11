@@ -49,7 +49,7 @@ public class LegacyStreamableHttpController {
             return json(result(id, Map.of("tools", tools())));
         }
         if ("tools/call".equals(method)) {
-            return json(callTool(id, asMap(request.get("params")), session));
+            return json(result(id, callTool(id, asMap(request.get("params")), session)));
         }
         return json(error(id, -32601, "Method not found: " + method));
     }
